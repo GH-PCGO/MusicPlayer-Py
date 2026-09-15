@@ -127,6 +127,63 @@ def embed_lyrics(path, lrc_text, title="", artist=""):
     return True
 
 
+def _build_apic_frame(mime, image_bytes, desc="", pic_type=3):
+    """构建一个 APIC 附件图片帧 (encoding=0 Latin-1 描述, 兼容性最好)。
+
+    pic_type: 3 = 正面专辑封面 (Front cover), 大多数播放器识别。
+    """
+    body = (b"\x00" + mime.encode("latin-1", errors="replace") + b"\x00" +
+            bytes([pic_type]) +
+            desc.encode("latin-1", errors="replace") + b"\x00" +
+            bytes(image_bytes))
+    return b"APIC" + len(body).to_bytes(4, "big") + b"\x00\x00" + body
+
+
+def embed_cover(path, image_bytes, mime="image/jpeg"):
+    """将封面图嵌入 MP3 的 ID3v2 APIC 帧 (保留 USLT/TIT2/TPE1 等现有帧)。
+
+    若无 ID3v2 标签则新建; 已有 APIC 帧则替换 (避免重复封面)。
+    """
+    if not image_bytes:
+        return False
+    with open(path, "rb") as f:
+        data = f.read()
+
+    has_tag = data[:3] == b"ID3" and len(data) >= 10
+    if has_tag:
+        version = data[3]
+        flags = data[5]
+        tag_size = _syncsafe_decode(data[6:10])
+        tag_data = data[10:10 + tag_size]
+    else:
+        version, flags, tag_size, tag_data = 0x03, 0, 0, b""
+
+    def frame_size_bytes(n):
+        return _syncsafe_encode(n) if version >= 0x04 else \
+            n.to_bytes(4, "big")
+
+    frames, _ = _parse_frames(tag_data, version)
+    apic = _build_apic_frame(mime, image_bytes)
+
+    new_frames = [apic]
+    for fid, fsize, fflags, fdata in frames:
+        if fid in (b"APIC",):
+            continue                      # 去掉旧封面
+        new_frames.append(fid + frame_size_bytes(fsize) + fflags + fdata)
+
+    new_tag_data = b"".join(new_frames) + b"\x00" * 16
+    header = (b"ID3" + bytes([version, 0x00, flags]) +
+              _syncsafe_encode(len(new_tag_data)))
+
+    if has_tag:
+        audio = data[10 + tag_size:]
+    else:
+        audio = data
+    with open(path, "wb") as f:
+        f.write(header + new_tag_data + audio)
+    return True
+
+
 def read_uslt(path):
     """读取 MP3 文件中的 USLT 歌词, 返回 (歌词文本, 语言) 或 (None, None)。"""
     with open(path, "rb") as f:

@@ -8,6 +8,7 @@
 """
 import os
 import queue
+import sys
 import threading
 import tkinter as tk
 import tkinter.ttk as ttk
@@ -16,7 +17,8 @@ from tkinter import filedialog, messagebox
 from PIL import Image, ImageDraw
 
 from widgets import PICTRUE, MAIN_BG, SEARCH_BG, FONT_FAMILY, load_image, \
-    to_photo, cover_crop
+    to_photo, cover_crop, ACCENT_HEX, ACCENT_DK_HEX, ACCENT_TXT_HEX, \
+    ACCENT_SOFT_HEX
 
 DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "music")
 
@@ -177,48 +179,81 @@ class StorageDialog(tk.Toplevel):
 
 
 class LocalScanDialog(tk.Toplevel):
-    """本地音乐扫描窗口 (类比 ReadLocalMusic)。on_file(path) 回调加入列表。"""
+    """本地音乐扫描窗口 (视觉重做 + macOS 焦点修复)。
+
+    - 无边框浮层: macOS 用 -type splash (可正常接收点击/焦点),
+      其余平台 overrideredirect。
+    - 关闭/销毁时自动把焦点还给主窗口, 避免 macOS 上"关掉后点不动主界面"。
+    """
 
     def __init__(self, master, on_file):
         super().__init__(master)
         self.title("本地音乐")
-        self.geometry("640x280")
-        self.overrideredirect(True)
+        self.geometry("640x300")
+        self.resizable(False, False)
         self.on_file = on_file
         self._dir = None
         self._scanning = False
         self._stop = False
+        self._found = 0
 
+        if sys.platform == "darwin":
+            try:
+                self.attributes("-type", "splash")
+            except tk.TclError:  # pragma: no cover - 极老 Tk 兜底
+                self.overrideredirect(True)
+        else:
+            self.overrideredirect(True)
+        self.protocol("WM_DELETE_WINDOW", self._hide)
         self.configure(bg="#FFFFFF")
-        card = tk.Frame(self, bg="#FFFFFF", highlightthickness=1,
+
+        # 顶部绿色强调条
+        tk.Frame(self, bg=ACCENT_HEX, height=5).place(x=0, y=0, width=640)
+
+        # 头部: 绿圆音符图标 + 标题/副标题
+        icon = tk.Canvas(self, width=46, height=46, bg="#FFFFFF",
+                         highlightthickness=0)
+        icon.place(x=26, y=20)
+        icon.create_oval(1, 1, 45, 45, fill=ACCENT_HEX, outline="")
+        icon.create_text(23, 24, text="\u266A", fill="#FFFFFF",
+                         font=(FONT_FAMILY, 22, "bold"))
+        tk.Label(self, text="扫描本地音乐", bg="#FFFFFF", fg="#1F2430",
+                 font=(FONT_FAMILY, 18, "bold")).place(x=84, y=20)
+        tk.Label(self, text="选择文件夹，把里面的 MP3 一键加入本地音乐",
+                 bg="#FFFFFF", fg="#9AA3B0",
+                 font=(FONT_FAMILY, 11)).place(x=84, y=52)
+
+        # 文件夹选择卡片
+        card = tk.Frame(self, bg="#F7F8FA", highlightthickness=1,
                         highlightbackground="#E7E9EE")
-        card.place(relx=0.5, rely=0.5, anchor="center", width=600, height=230)
-
-        tk.Label(card, text="扫描本地音乐", font=(FONT_FAMILY, 18, "bold"),
-                 bg="#FFFFFF", fg="#1F2430").place(x=24, y=16)
-
-        self.label1 = tk.Label(card, text="选择文件夹：", font=(FONT_FAMILY, 12),
-                               bg="#FFFFFF", fg="#5A6472")
-        self.label1.place(x=24, y=70)
+        card.place(x=26, y=86, width=588, height=92)
+        tk.Label(card, text="文件夹", bg="#F7F8FA", fg="#5A6472",
+                 font=(FONT_FAMILY, 11)).place(x=20, y=12)
         self.text = ttk.Entry(card, font=(FONT_FAMILY, 11), state="readonly")
-        self.text.place(x=130, y=66, width=292, height=34)
+        self.text.place(x=20, y=38, width=424, height=34)
         self.btn_choose = ttk.Button(card, text="选择...", command=self._choose,
                                      style="Accent.TButton")
-        self.btn_choose.place(x=436, y=64, width=112, height=36)
+        self.btn_choose.place(x=456, y=36, width=112, height=36)
 
-        self.status = tk.Label(card, text="", font=(FONT_FAMILY, 11),
-                               bg="#FFFFFF", fg="#1F2430", anchor="w")
-        self.status.place(x=24, y=112)
-        self.now = tk.Label(card, text="", font=(FONT_FAMILY, 11), anchor="w",
-                            bg="#FFFFFF", fg="#9AA3B0")
-        self.now.place(x=170, y=112, width=380)
+        # 状态区 (扫描进度/提示)
+        self.status = tk.Label(self, text="请选择文件夹开始扫描",
+                               bg="#FFFFFF", fg="#9AA3B0",
+                               font=(FONT_FAMILY, 12), anchor="w")
+        self.status.place(x=28, y=194, width=580)
+        self.now = tk.Label(self, text="", bg="#FFFFFF", fg="#5A6472",
+                            font=(FONT_FAMILY, 11), anchor="w")
+        self.now.place(x=28, y=222, width=580)
 
-        self.btn_scan = ttk.Button(card, text="扫描", command=self._scan,
+        # 底部按钮
+        self.btn_scan = ttk.Button(self, text="\u25B6 开始扫描", command=self._scan,
                                    style="Accent.TButton")
-        self.btn_scan.place(x=340, y=166, width=110, height=36)
-        self.btn_ok = ttk.Button(card, text="确认", command=self._hide,
+        self.btn_scan.place(x=378, y=260, width=112, height=34)
+        self.btn_ok = ttk.Button(self, text="完成", command=self._hide,
                                  style="TButton")
-        self.btn_ok.place(x=458, y=166, width=110, height=36)
+        self.btn_ok.place(x=502, y=260, width=112, height=34)
+        self.bind("<Return>", lambda e: self._hide())
+        self.bind("<Escape>", lambda e: self._hide())
+        self.bind("<Destroy>", self._on_destroy)
 
         # 工作线程只往队列投递, 由主线程 after 轮询刷新 (Tk 非线程安全)
         self._scan_queue = queue.SimpleQueue()
@@ -227,7 +262,21 @@ class LocalScanDialog(tk.Toplevel):
         self.center()
 
     def center(self):
-        _center_over(self, 640, 280, self.master)
+        _center_over(self, 640, 300, self.master)
+
+    def _refocus_master(self):
+        """关闭后把点击/键盘焦点还给主窗口。"""
+        try:
+            m = self.master
+            if m is not None and m.winfo_exists():
+                m.lift()
+                m.focus_force()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_destroy(self, event):
+        if event.widget is self:
+            self._refocus_master()
 
     def _choose(self):
         folder = filedialog.askdirectory(title="选择文件夹")
@@ -237,16 +286,20 @@ class LocalScanDialog(tk.Toplevel):
             self.text.delete(0, "end")
             self.text.insert(0, folder)
             self.text.configure(state="readonly")
-            self.status.configure(text="")
+            self.status.configure(text="文件夹已选择，点击「开始扫描」")
+            self.status.configure(fg=ACCENT_TXT_HEX)
 
     def _scan(self):
         if self.text.get().strip() == "":
-            self.status.configure(text="请选择文件路径！")
+            self.status.configure(text="请先选择文件路径！")
+            self.status.configure(fg="#EF4444")
             return
         if self._scanning:
             return
         self._scanning = True
+        self._found = 0
         self.btn_scan.configure(state="disabled")
+        self.status.configure(text="正在扫描文件…", fg="#1F2430")
         root = self.text.get().strip()
         threading.Thread(target=self._walk, args=(root,), daemon=True).start()
 
@@ -270,13 +323,14 @@ class LocalScanDialog(tk.Toplevel):
 
     def _apply(self, fn):
         if fn is None:
-            self.status.configure(text="正在扫描文件：")
-            self.now.configure(text="")
+            self.status.configure(text="正在扫描文件…")
         elif fn is True:
-            self.status.configure(text="文件扫描完成!")
+            self.status.configure(text="扫描完成！新发现 %d 首歌曲" % self._found,
+                                  fg=ACCENT_TXT_HEX)
             self.now.configure(text="")
             self.btn_scan.configure(state="normal")
         else:
+            self._found += 1
             self.now.configure(text=fn)
             self.on_file(fn)
 
@@ -290,7 +344,7 @@ class LocalScanDialog(tk.Toplevel):
                         full = os.path.join(dirpath, fn)
                         self._web(None)
                         self._web(full)
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
         finally:
             self._scanning = False
@@ -300,6 +354,7 @@ class LocalScanDialog(tk.Toplevel):
 
     def _hide(self):
         self.withdraw()
+        self._refocus_master()
 
 
 class QueueDialog(tk.Toplevel):

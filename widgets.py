@@ -290,6 +290,76 @@ def compose_row(base, n, title, artist="", dur="", checked=False,
     return to_photo(img)
 
 
+# 下载管理列表列头: 序号/歌名/歌手/时长/大小/状态
+DOWNLOAD_HEADER_COLS = (("序号", 44, "l"), ("歌名", 78, "l"),
+                        ("歌手", 480, "r"), ("时长", 560, "r"),
+                        ("大小", 660, "r"), ("状态", 775, "r"))
+
+
+def compose_dl_row(base, n, title, cells, hover=False, fsize=13):
+    """下载管理多列行: 序号 + 歌名 + 右对齐各列。
+
+    cells: [(text, right_x, fg), ...] 按右边界对齐绘制 (歌手/时长/大小/状态)。
+    """
+    w, h = base.size
+    img = base.convert("RGBA")
+    overlay = Image.new("RGBA", (w, h), _HOVER if hover else _ROW_FILL)
+    img = Image.alpha_composite(img, overlay)
+    d = ImageDraw.Draw(img)
+
+    f = _font(fsize)
+    d.text((44, (h - fsize) // 2), _clip(d, n, f, 44), font=f, fill=_TEXT_FG)
+
+    tf = _font(fsize, bold=True)
+    if cells and cells[0][1]:
+        title_right = max(cells[0][1] - 16, 200)
+    else:
+        title_right = 560
+    d.text((78, (h - fsize) // 2),
+           _clip(d, title, tf, title_right - 78), font=tf, fill=_TEXT_FG)
+
+    sf = _font(12)
+    for text, xx, fg in cells:
+        t = str(text or "")
+        if not t:
+            continue
+        t2 = _clip(d, t, sf, 130)
+        d.text((xx - int(d.textlength(t2, font=sf)), (h - 12) // 2),
+               t2, font=sf, fill=fg)
+    return to_photo(img)
+
+
+def fmt_size(nbytes):
+    """字节数 -> 可读大小 (B/KB/MB/GB)。"""
+    try:
+        b = float(nbytes)
+    except Exception:  # noqa: BLE001
+        return ""
+    if b <= 0:
+        return "-"
+    for unit in ("B", "KB", "MB", "GB"):
+        if b < 1024:
+            return "%d %s" % (int(b), unit) if unit == "B" \
+                else "%.1f %s" % (b, unit)
+        b /= 1024.0
+    return "%.1f GB" % b
+
+
+def fmt_duration(sec):
+    """秒数 -> mm:ss 或 h:mm:ss。无效返回空串。"""
+    try:
+        s = int(float(sec))
+    except Exception:  # noqa: BLE001
+        return ""
+    if s <= 0:
+        return ""
+    m, s = divmod(s, 60)
+    h, m = divmod(m, 60)
+    if h:
+        return "%d:%02d:%02d" % (h, m, s)
+    return "%d:%02d" % (m, s)
+
+
 def row_parts(row):
     """把行数据规范成 (序号, 歌名, 歌手, 时长)。兼容 str 或元组。"""
     if not isinstance(row, str):
@@ -613,6 +683,8 @@ class ImageList(_BgCanvasList):
         super().__init__(master, width=width, height=height, row_h=row_h,
                          header=header, **kw)
         self.on_double = on_double
+        self.selected_index = None      # 单击选中的行 (顶部操作按钮用)
+        self.canvas.bind("<Button-1>", self._select)
         self.canvas.bind("<Double-Button-1>", self._double)
 
     def _make_photo(self, i, row):
@@ -620,7 +692,16 @@ class ImageList(_BgCanvasList):
             return self._empty_photo(i)
         n, title, artist, dur = row_parts(row)
         return compose_row(self._slices(i), n, title, artist, dur,
-                           checked=False, hover=(i == self._hover_idx))
+                           checked=False,
+                           hover=(i == self._hover_idx or
+                                  i == self.selected_index))
+
+    def _select(self, event):
+        idx = self._index_at(event.y)
+        if idx is None:
+            return
+        self.selected_index = idx
+        self._rerender(idx)
 
     def _double(self, event):
         idx = self._index_at(event.y)
@@ -723,7 +804,7 @@ class ImageCheckList(_BgCanvasList):
 class RecommendGrid(tk.Frame):
     """首页推荐网格: 连续 cover 背景 + 圆角白卡 + 1:1 封面 + 歌名 + 滚动提示。"""
 
-    SONGS = ["七里香", "大风吹", "下辈子不一定还能遇见你", "半生雪", "少年",
+    SONGS = ["一路向北", "大风吹", "下辈子不一定还能遇见你", "半生雪", "少年",
              "潮汐", "烟雨人间", "雾里", "晴天", "奔赴星空",
              "稻香", "虞兮叹", "青花瓷", "起风了", "难渡",
              "夜曲", "刺客", "霍元甲", "谪仙", "听妈妈的话"]

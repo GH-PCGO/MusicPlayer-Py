@@ -201,12 +201,14 @@ class KuwoAPI:
         return resp
 
     def download(self, rid, filename, folder, on_done=None,
-                 on_progress=None, title="", artist=""):
+                 on_progress=None, title="", artist="", cover=None):
         """下载完整 mp3 到 folder, 支持回调 (线程中执行)。文件名保持《歌名》.mp3。
 
         on_done(path):   完成回调 (失败时 path=None)。
         on_progress(bytes_done): 分块进度回调 (已写入字节数)。
-        下载完成后自动嵌入 ID3v2 歌词 (WMP 可显示) 并保存同名 .lrc 文件。
+        cover(url): 封面图片 URL, 下载完成后写入 ID3v2 APIC 帧 (播放条/系统播放器
+           均可显示头像)。下载完成后自动嵌入 ID3v2 歌词 (WMP 可显示) 并保存
+           同名 .lrc 文件。
         """
         def worker():
             path = None
@@ -229,7 +231,7 @@ class KuwoAPI:
                                     pass
                 try:
                     from lyrics import (fetch_lyrics, embed_lyrics,
-                                        save_lrc, lrc_to_plain)
+                                        embed_cover, save_lrc, lrc_to_plain)
                     name = title or os.path.splitext(filename)[0]
                     lrc = fetch_lyrics(rid, name, artist,
                                        session=self._session)
@@ -238,6 +240,16 @@ class KuwoAPI:
                         if plain:
                             embed_lyrics(path, plain, name, artist)
                         save_lrc(path, lrc)
+                    if cover:                           # 嵌入封面 APIC 帧
+                        try:
+                            r = self._session.get(cover, timeout=10)
+                            if r.status_code == 200 and r.content:
+                                mime = (r.headers.get("Content-Type")
+                                        or "image/jpeg").split(";")[0]
+                                embed_cover(path, r.content,
+                                            mime or "image/jpeg")
+                        except Exception as exc:  # noqa: BLE001
+                            print("封面嵌入失败 %s: %s" % (filename, exc))
                 except Exception as exc:  # noqa: BLE001
                     print("歌词嵌入失败 %s: %s" % (filename, exc))
             except Exception as exc:  # noqa: BLE001

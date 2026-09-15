@@ -57,6 +57,68 @@ def init_global_font():
             pass
 
 
+def _probe_meta(path):
+    """后台线程用: 读文件时长(格式化串)与歌手, 供下载列表列显示。"""
+    dur, artist = "", ""
+    try:
+        import mutagen
+        f = mutagen.File(path)
+        if f:
+            info = getattr(f, "info", None)
+            if info is not None and getattr(info, "length", None):
+                dur = widgets.fmt_duration(float(info.length))
+            tags = getattr(f, "tags", None)
+            if tags:
+                try:
+                    fr = tags.get("TPE1")
+                    if fr:
+                        t = getattr(fr, "text", None)
+                        if t:
+                            try:
+                                artist = str(t[0]).split("\x00")[-1].strip()
+                            except Exception:  # noqa: BLE001
+                                artist = str(t).strip()
+                except Exception:  # noqa: BLE001
+                    pass
+    except Exception:  # noqa: BLE001
+        pass
+    return dur, artist
+
+
+class DownloadList(ImageList):
+    """下载管理列表: 自定义 6 列 (序号/歌名/歌手/时长/大小/状态)。"""
+
+    def __init__(self, master, width=800, height=416, **kw):
+        super().__init__(master, width=width, height=height,
+                         header=widgets.DOWNLOAD_HEADER_COLS, **kw)
+
+    def _make_photo(self, i, row):
+        if row is None:
+            return self._empty_photo(i)
+        if len(row) < 6:
+            n, title, artist, dur = widgets.row_parts(row)
+            size, status = "", ""
+        else:
+            n, title, artist, dur, size, status = row
+        cells = [
+            (str(artist or ""), 480, "#6B7280"),
+            (str(dur or ""), 560, "#6B7280"),
+            (str(size or ""), 660, "#6B7280"),
+            (str(status or ""), 775, self._status_fg(status)),
+        ]
+        return widgets.compose_dl_row(
+            self._slices(i), n, title, cells,
+            hover=(i == self._hover_idx or i == self.selected_index))
+
+    @staticmethod
+    def _status_fg(status):
+        if str(status).startswith("✓"):
+            return "#0F9D4A"
+        if "失败" in str(status):
+            return "#EF4444"
+        return "#6B7280"
+
+
 class ToolButton(tk.Label):
     """无边框图标按钮, 等价于原项目的图片按钮 (but1..but5)。"""
 
@@ -195,7 +257,18 @@ class MainWindow:
         apply_tk_theme(self.root)
         self.root.title("音乐下载器")
         self.root.geometry("%dx%d" % (self.W, self.H))
-        self.root.overrideredirect(True)
+        self._splash_mode = False
+        if sys.platform == "darwin":
+            # macOS 上 overrideredirect 窗口永远无法成为 key window——
+            # KeyPress/FocusIn/FocusOut 事件根本不送达, 导致输入框无法
+            # 获得光标/键盘输入/鼠标文本选中。改用 splash 型无边框窗口。
+            try:
+                self.root.attributes("-type", "splash")
+                self._splash_mode = True
+            except tk.TclError:
+                pass
+        if not self._splash_mode:
+            self.root.overrideredirect(True)
         self.root.protocol("WM_DELETE_WINDOW", self.exit_app)
         self.root.bind("<Map>", self._on_map)
         self.center()
@@ -242,6 +315,7 @@ class MainWindow:
         self._dl_state = {}          # path → {"row","status","mb"}
         self._dl_failed = {}         # path → {"rid","display"} 用于重试
         self._dl_last_mb = {}        # path → 上次已显示的 MB (节流)
+        self._dl_meta = {}           # path → (时长格式化串, 歌手) 后台探读
 
         self._build_ui()
         self._load_settings()   # 恢复模式/音量/静音 (不自动播放)
@@ -357,9 +431,28 @@ class MainWindow:
         tk.Label(self.music_panel, text="下载管理", bg="#FFFFFF",
                  fg="#1F2430", font=ui_font(16, "bold"),
                  anchor="w").place(x=20, y=12, width=200, height=32)
-        self.download_list = ImageList(self.music_panel, 800, 416,
-                                       on_double=self.on_download_play)
+        self.download_list = DownloadList(self.music_panel, 800, 416,
+                                          on_double=self.on_download_play)
         self.download_list.place(x=0, y=52, width=800, height=416)
+
+        # 下载管理操作按钮 (右键菜单同功能)
+        def dbtn(x, text, cmd):
+            tk_btn = ttk.Button(self.music_panel, text=text, command=cmd,
+                                cursor="hand2", style="TButton")
+            tk_btn.place(x=x, y=8, width=76, height=32)
+        dbtn(528, "加入队列", self.on_dl_add_queue)
+        dbtn(616, "删除", self.on_dl_delete)
+        dbtn(704, "本地打开", self.on_dl_show_dir)
+
+        self._dl_menu_idx = -1
+        self._dl_menu = tk.Menu(self.root, tearoff=0)
+        self._dl_menu.add_command(label="加入播放队列",
+                                  command=self._dl_menu_add_queue)
+        self._dl_menu.add_command(label="删除",
+                                  command=self._dl_menu_delete)
+        self._dl_menu.add_command(label="从本地文件夹显示",
+                                  command=self._dl_menu_show_dir)
+        self.download_list.canvas.bind("<Button-3>", self._dl_right_click)
 
         # ---- 本地音乐面板 ----
         self.music_panel2 = ImagePanel(self.main, kind="main")
@@ -380,15 +473,7 @@ class MainWindow:
 
     def _build_search_area(self):
         sp = self.search_panel
-        style = ttk.Style(self.root)
-        style.configure("Search.TCombobox", fieldbackground="#FFFFFF",
-                        background="#FFFFFF", foreground="#1F2430",
-                        arrowsize=10, padding=(10, 4), relief="flat",
-                        bordercolor="#FFFFFF", lightcolor="#FFFFFF",
-                        darkcolor="#FFFFFF", borderwidth=0)
-        style.map("Search.TCombobox",
-                  fieldbackground=[("readonly", "#FFFFFF")],
-                  selectbackground=[("readonly", "#FFFFFF")])
+        self._history = ["陈奕迅"]
         # 圆角胶囊容器 (半高圆角 = 胶囊)
         pill = tk.Canvas(sp, width=392, height=36, bg="#F7F8FA",
                          highlightthickness=0)
@@ -398,12 +483,26 @@ class MainWindow:
         pill.create_oval(0, 0, 36, 36, fill="#F3F4F6", outline="", width=0)
         pill.create_oval(356, 0, 392, 36, fill="#F3F4F6", outline="", width=0)
 
-        self.box = ttk.Combobox(sp, values=["陈奕迅"],
-                                font=ui_font(12), style="Search.TCombobox")
-        self.box.set("陈奕迅")
-        self.box.place(x=28, y=18, width=288, height=28)
+        # 用 tk.Entry 替代 ttk.Combobox: macOS 下原生支持鼠标选中文本与光标闪烁
+        self.box = tk.Entry(sp, font=ui_font(12), bg="#FFFFFF", fg="#1F2430",
+                            bd=0, relief="flat", insertbackground="#1F2430",
+                            highlightthickness=0,
+                            selectbackground=widgets.ACCENT_HEX,
+                            selectforeground="#FFFFFF")
+        self.box.insert(0, "陈奕迅")
+        self.box.place(x=26, y=18, width=272, height=28)
         self.box.bind("<Return>", lambda e: self.on_search())
-        self.box.bind("<<ComboboxSelected>>", lambda e: self.on_search())
+        self.box.bind("<Button-1>", lambda e: (self.box.focus_set(),
+                                               self.root.tkraise(),
+                                               self.box.focus_force()))
+
+        # 历史下拉按钮 (取代 Combobox 箭头): 弹出搜索历史菜单
+        self._history_menu = tk.Menu(self.root, tearoff=0)
+        arrow = tk.Label(sp, text="\u25BE", font=symbol_font(11),
+                         bg="#FFFFFF", fg="#8A93A0", cursor="hand2", bd=0)
+        arrow.place(x=298, y=18, width=34, height=28)
+        arrow.bind("<Button-1>", lambda e: self._pop_search_history())
+        self._history_arrow = arrow
 
         self.btn_search = _CircleBtn(sp, "\U0001F50D", self.on_search,
                                      size=30, fill=widgets.ACCENT_HEX,
@@ -586,7 +685,15 @@ fg="#FFFFFF", bg="#FFFFFF",
         self.music_panel2.tkraise()
         self.search_panel.tkraise()
         self.playbar.tkraise()
-        if self.scan_dialog is None or not self.scan_dialog.winfo_exists():
+        if self.scan_dialog is not None and self.scan_dialog.winfo_exists():
+            try:
+                self.scan_dialog.deiconify()
+                self.scan_dialog.center()
+                self.scan_dialog.lift()
+                self.scan_dialog.focus_force()
+            except Exception:  # noqa: BLE001
+                pass
+        else:
             self.scan_dialog = dialogs.LocalScanDialog(self.root,
                                                        self.add_local_song)
 
@@ -683,10 +790,32 @@ fg="#FFFFFF", bg="#FFFFFF",
 
     def add_history(self, kw):
         """与原项目 box.addItem 一致: 不查重, 每次都追加。"""
-        vals = list(self.box["values"])
-        vals.append(kw)
-        self.box["values"] = vals
-        self.box.set(kw)
+        self._history.append(kw)
+        self.box.delete(0, "end")
+        self.box.insert(0, kw)
+
+    def _pop_search_history(self):
+        """弹出搜索历史下拉菜单 (取代 Combobox 箭头)。"""
+        m = self._history_menu
+        m.delete(0, "end")
+        seen = []
+        for kw in reversed(self._history):
+            if kw and kw not in seen:
+                seen.append(kw)
+                m.add_command(label=kw,
+                              command=lambda k=kw: self._apply_history(k))
+        if not seen:
+            m.add_command(label="(暂无历史)", state="disabled")
+        try:
+            m.tk_popup(self._history_arrow.winfo_rootx(),
+                       self._history_arrow.winfo_rooty() + 30)
+        finally:
+            m.grab_release()
+
+    def _apply_history(self, kw):
+        self.box.delete(0, "end")
+        self.box.insert(0, kw)
+        self.on_search()
 
     def on_recommend_click(self, name):
         self.current_kw = name
@@ -708,22 +837,27 @@ fg="#FFFFFF", bg="#FFFFFF",
             row = self.search_array[idx]
             display = KuwoAPI.display_name(row)      # 《歌名》.mp3 (保留书名号)
             n = str(len(self.download_paths) + 1)
-            self.download_list.add((n, display, "", "下载中..."))
+            self.download_list.add((n, display,
+                                    KuwoAPI.artist_name(row), "", "",
+                                    "下载中..."))
             path = os.path.join(dialogs.DOWNLOAD_DIR, display)
+            cover = self._cover_by_title.get(KuwoAPI.song_name(row))
             self.download_paths.append(path)
             self._dl_state[path] = {"row": len(self.download_paths) - 1,
                                 "status": "downloading", "mb": 0,
                                 "rid": KuwoAPI.row_rid(row),
                                 "display": display,
                                 "title": KuwoAPI.song_name(row),
-                                "artist": KuwoAPI.artist_name(row)}
+                                "artist": KuwoAPI.artist_name(row),
+                                "cover": cover}
             self._dl_failed.pop(path, None)
             self.api.download(KuwoAPI.row_rid(row), display,
                               dialogs.DOWNLOAD_DIR,
                               on_done=lambda p, fp=path: self._dl_finished(fp, p),
                               on_progress=lambda b, fp=path: self._dl_progress(fp, b),
                               title=KuwoAPI.song_name(row),
-                              artist=KuwoAPI.artist_name(row))
+                              artist=KuwoAPI.artist_name(row),
+                              cover=cover)
             print("开始下载:", KuwoAPI.song_name(row))
 
     # ------------------------------------------------------ 下载进度/重试
@@ -747,49 +881,88 @@ fg="#FFFFFF", bg="#FFFFFF",
         old = self.download_list._rows[i] if i < len(self.download_list._rows) \
             else None
         if old:
-            self.download_list.update_row(i, (old[0], old[1], old[2],
-                                              "下载中 %.1fMB" % mb))
+            parts = list(old)
+            if len(parts) < 6:
+                parts += [""] * (6 - len(parts))
+            parts[4] = widgets.fmt_size(mb * 1024 * 1024)
+            parts[5] = "下载中 %.1fMB" % mb
+            self.download_list.update_row(i, tuple(parts))
 
     def _dl_finished(self, path, result_path):
         """下载线程完成回调 (非主线程): 转投主线程更新状态。"""
         self._ui_queue.put(lambda: self._dl_finished_ui(path, result_path))
 
     def _dl_finished_ui(self, path, result_path):
+        """下载完成/失败: 更新状态列, 完成的后台补读时长/歌手。"""
         st = self._dl_state.get(path)
         if not st:
             return
-        i = st["row"]
-        old = self.download_list._rows[i] if i < len(self.download_list._rows) \
-            else None
-        if old is None:
-            return
         if result_path:
             st["status"] = "done"
-            self.download_list.update_row(i, (old[0], old[1], old[2], "✓ 完成"))
+            self._threaded_meta(path)
         else:
             st["status"] = "failed"
-            self.download_list.update_row(i, (old[0], old[1], old[2],
-                                              "失败·双击重试"))
             self._dl_failed[path] = {"rid": st.get("rid", ""),
                                      "display": st.get("display", ""),
                                      "title": st.get("title", ""),
-                                     "artist": st.get("artist", "")}
+                                     "artist": st.get("artist", ""),
+                                     "cover": st.get("cover")}
+        self._dl_refresh(path)
+
+    def _dl_row(self, i, path):
+        """生成下载列表行: (序号, 歌名, 歌手, 时长, 大小, 状态)。"""
+        st = self._dl_state.get(path) or {}
+        display = st.get("display") or os.path.basename(path)
+        meta_dur, meta_artist = self._dl_meta.get(path, ("", ""))
+        artist = st.get("artist") or meta_artist
+        if path in self._dl_failed:
+            status = "失败·双击重试"
+        elif st.get("status") == "done":
+            status = "✓ 完成"
+        elif st.get("status") == "downloading":
+            status = "下载中 %.1fMB" % st.get("mb", 0.0)
+        else:
+            status = ""
+        size = widgets.fmt_size(os.path.getsize(path)) \
+            if os.path.exists(path) else ""
+        return (str(i + 1), display, artist, meta_dur, size, status)
+
+    def _dl_refresh(self, path):
+        """按 path 刷新下载列表该行 (主线程调用)。"""
+        if path not in self.download_paths:
+            return
+        i = self.download_paths.index(path)
+        st = self._dl_state.get(path)
+        if st:
+            st["row"] = i
+        try:
+            self.download_list.update_row(i, self._dl_row(i, path))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _threaded_meta(self, path):
+        """后台探读时长/歌手, 完成后回投刷新该行 (避免 UI 卡顿)。"""
+        def worker():
+            dur, artist = _probe_meta(path)
+            self._dl_meta[path] = (dur, artist)
+            if path in self.download_paths:
+                self._ui_queue.put(lambda: self._dl_refresh(path))
+        threading.Thread(target=worker, daemon=True).start()
 
     def _dl_retry(self, path):
         """失败行双击重试 (复用 on_download_play 入口)。"""
         info = self._dl_failed.get(path)
         if not info:
             return
-        self.download_list.update_row(self._dl_state[path]["row"],
-                                      (str(self._dl_state[path]["row"] + 1),
-                                       info["display"], "", "下载中..."))
         self._dl_state[path]["status"] = "downloading"
         self._dl_state[path]["mb"] = 0
         self._dl_failed.pop(path, None)
+        self._dl_refresh(path)
         self.api.download(info["rid"], info["display"], dialogs.DOWNLOAD_DIR,
                           on_done=lambda p, fp=path: self._dl_finished(fp, p),
                           on_progress=lambda b, fp=path: self._dl_progress(fp, b),
-                          title=info["title"], artist=info["artist"])
+                          title=info["title"], artist=info["artist"],
+                          cover=info.get("cover"))
 
     def on_play_online(self):
         """在线播放: 下载到临时目录后, 在 APP 内部用 MCI 直接播放 (不再跳浏览器)。"""
@@ -812,7 +985,9 @@ fg="#FFFFFF", bg="#FFFFFF",
         self.api.download(KuwoAPI.row_rid(row), display, temp_dir,
                           on_done=self._online_ready,
                           title=KuwoAPI.song_name(row),
-                          artist=KuwoAPI.artist_name(row))
+                          artist=KuwoAPI.artist_name(row),
+                          cover=self._cover_by_title.get(
+                              KuwoAPI.song_name(row)))
 
     def on_search_play(self, index):
         """搜索结果双击 → 直接在线播放该行。"""
@@ -888,6 +1063,141 @@ fg="#FFFFFF", bg="#FFFFFF",
             self._pb_playlist = list(self.download_paths)
             self._pb_idx = index
             self._play_path(path)
+
+    # ------------------------------------------------------ 下载管理操作
+    def _dl_path_at(self, index):
+        """返回第 index 行的下载路径, 越界/未完成返回 None。"""
+        if not (0 <= index < len(self.download_paths)):
+            return None
+        path = self.download_paths[index]
+        if path in self._dl_failed:
+            return None
+        st = self._dl_state.get(path) or {}
+        if st.get("status") == "downloading":
+            return None
+        return path
+
+    def _dl_add_queue(self, index):
+        path = self._dl_path_at(index)
+        if not path:
+            messagebox.showinfo("提示", "该歌曲尚未下载完成")
+            return
+        title = (self._dl_state.get(path) or {}).get("display") or \
+            os.path.basename(path)
+        for q in self._queue:
+            if q.get("type") == "file" and q.get("path") == path:
+                messagebox.showinfo("播放队列", "该歌曲已在队列中")
+                return
+        self._queue.append({"type": "file", "path": path, "title": title})
+        if self._queue_dlg is not None:
+            try:
+                if self._queue_dlg.winfo_exists():
+                    self._queue_dlg.refresh()
+            except Exception:  # noqa: BLE001
+                pass
+        messagebox.showinfo("播放队列", "已加入播放队列")
+
+    def _dl_show_dir(self, index):
+        if not (0 <= index < len(self.download_paths)):
+            return
+        folder = os.path.dirname(self.download_paths[index])
+        if not os.path.isdir(folder):
+            messagebox.showerror("错误", "下载文件夹不存在")
+            return
+        open_path(folder)
+
+    def _dl_delete(self, index):
+        if not (0 <= index < len(self.download_paths)):
+            return
+        path = self.download_paths[index]
+        if path in self._dl_failed:
+            self._dl_failed.pop(path, None)
+        st = self._dl_state.get(path)
+        if st and st.get("status") == "downloading":
+            messagebox.showinfo("提示", "下载中的歌曲暂不能删除")
+            return
+        if not os.path.exists(path):
+            if not messagebox.askyesno("删除", "歌曲文件不存在，要从列表中移除吗？"):
+                return
+        else:
+            if not messagebox.askyesno("删除",
+                                       "确定删除《%s》及歌词文件吗？" %
+                                       os.path.basename(path)):
+                return
+            try:
+                os.remove(path)
+                lrc = os.path.splitext(path)[0] + ".lrc"
+                if os.path.isfile(lrc):
+                    os.remove(lrc)
+            except OSError as exc:  # noqa: BLE001
+                messagebox.showerror("删除失败", str(exc))
+                return
+        self.download_paths.pop(index)
+        self._dl_state.pop(path, None)
+        self._dl_failed.pop(path, None)
+        if self._pb_path == path:      # 正在播放被删文件 → 停
+            try:
+                self._engine.stop()
+                self._pb_path = None
+                self._pb_btn_play.set_glyph("\u25B6")
+                self._pb_track.configure(text="未在播放")
+                self._pb_time.configure(text="0:00 / 0:00")
+            except Exception:  # noqa: BLE001
+                pass
+
+        def rebuild():
+            try:
+                self.download_list.set_rows(rows)
+            except Exception:  # noqa: BLE001
+                pass
+        rows = []
+        for i, p in enumerate(self.download_paths):
+            rows.append(self._dl_row(i, p))
+        for i, p in enumerate(self.download_paths):
+            stt = self._dl_state.get(p)
+            if stt:
+                stt["row"] = i
+        self._ui_queue.put(rebuild)
+
+    def _dl_right_click(self, event):
+        idx = self.download_list._index_at(event.y)
+        if idx is None:
+            return
+        self._dl_menu_idx = idx
+        try:
+            self._dl_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self._dl_menu.grab_release()
+
+    def _dl_menu_add_queue(self):
+        self._dl_add_queue(self._dl_menu_idx)
+
+    def _dl_menu_delete(self):
+        self._dl_delete(self._dl_menu_idx)
+
+    def _dl_menu_show_dir(self):
+        self._dl_show_dir(self._dl_menu_idx)
+
+    def on_dl_add_queue(self):
+        idx = self.download_list.selected_index
+        if idx is None:
+            messagebox.showinfo("提示", "请先在列表里单击选中要操作的歌曲")
+            return
+        self._dl_add_queue(idx)
+
+    def on_dl_delete(self):
+        idx = self.download_list.selected_index
+        if idx is None:
+            messagebox.showinfo("提示", "请先在列表里单击选中要操作的歌曲")
+            return
+        self._dl_delete(idx)
+
+    def on_dl_show_dir(self):
+        idx = self.download_list.selected_index
+        if idx is None:
+            messagebox.showinfo("提示", "请先在列表里单击选中要操作的歌曲")
+            return
+        self._dl_show_dir(idx)
 
     def on_local_play(self, index):
         if 0 <= index < len(self.local_paths):
@@ -1002,20 +1312,17 @@ fg="#FFFFFF", bg="#FFFFFF",
             return
 
         title = self._song_title_artist(path)[0]
-        # 在线临时目录 → 用搜索结果封面 URL
-        online_tmp = os.path.join(tempfile.gettempdir(), "musicplayer_online")
-        url = self._cover_by_title.get(title) if \
-            os.path.dirname(path) == online_tmp else ""
+        # 按歌名查搜索结果封面 URL (不管本地还是在线, 能识别同名歌曲即用)
+        url = self._cover_by_title.get(title, "")
 
         def worker():
             img = None
-            if not url:
-                try:
-                    img = read_cover(path)          # 1 内嵌 APIC
-                except Exception:  # noqa: BLE001
-                    img = None
-            if img is None and not url:
-                base = os.path.splitext(path)[0]   # 2 同目录 jpg
+            try:
+                img = read_cover(path)               # 1 内嵌 APIC
+            except Exception:  # noqa: BLE001
+                img = None
+            if img is None:
+                base = os.path.splitext(path)[0]     # 2 同目录 jpg
                 for cand in (base + ".jpg",
                              os.path.join(os.path.dirname(path), "cover.jpg"),
                              os.path.join(os.path.dirname(path), "folder.jpg")):
@@ -1027,7 +1334,7 @@ fg="#FFFFFF", bg="#FFFFFF",
                             img = None
                         if img:
                             break
-            if img is None and url:                 # 3 在线封面
+            if img is None and url:                  # 3 在线封面
                 try:
                     r = requests.get(url, timeout=8)
                     if r.status_code == 200:
@@ -1375,7 +1682,15 @@ fg="#FFFFFF", bg="#FFFFFF",
 
         无边框窗口直接 iconify 在多数平台上不可靠, 先临时加回系统
         装饰再最小化 (macOS 上 overrideredirect 切换失败则直接 iconify)。
+        splash 型窗口 (macOS) 本身无边框, 无需切换装饰, 直接最小化即可。
         """
+        if getattr(self, "_splash_mode", False):
+            self._taskbar_min = (self.root.winfo_x(), self.root.winfo_y())
+            try:
+                self.root.iconify()
+            except tk.TclError:
+                pass
+            return
         self._taskbar_min = (self.root.winfo_x(), self.root.winfo_y())
         self._minimizing = True
         try:
@@ -1405,10 +1720,11 @@ fg="#FFFFFF", bg="#FFFFFF",
         if pos is None:
             return
         self._taskbar_min = None
-        try:
-            self.root.overrideredirect(True)
-        except Exception:  # noqa: BLE001
-            pass
+        if not getattr(self, "_splash_mode", False):
+            try:
+                self.root.overrideredirect(True)
+            except Exception:  # noqa: BLE001
+                pass
         self.root.geometry("+%d+%d" % pos)
         self.root.tkraise()
         self.root.focus_force()
@@ -1428,6 +1744,7 @@ fg="#FFFFFF", bg="#FFFFFF",
         self.root.deiconify()
         self.root.state("normal")
         self.root.tkraise()
+        self.root.focus_force()   # 从托盘回来也确保窗口可接收键盘
 
     def exit_app(self):
         self._save_settings()
@@ -1476,8 +1793,13 @@ fg="#FFFFFF", bg="#FFFFFF",
             rows = []
             for i, fn in enumerate(sorted(f for f in os.listdir(folder)
                                           if f.lower().endswith(".mp3"))):
-                rows.append((str(len(self.download_paths) + i + 1), fn, "", ""))
-                self.download_paths.append(os.path.join(folder, fn))
+                full = os.path.join(folder, fn)
+                dur, artist = _probe_meta(full)
+                self._dl_meta[full] = (dur, artist)
+                size = widgets.fmt_size(os.path.getsize(full))
+                rows.append((str(len(self.download_paths) + i + 1), fn,
+                             artist, dur, size, ""))
+                self.download_paths.append(full)
             if rows:
                 # 不能跨线程直接 after, 只把工作投递到主线程队列
                 self._ui_queue.put(lambda: self.download_list.set_rows(rows))
