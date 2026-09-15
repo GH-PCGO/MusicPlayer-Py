@@ -15,7 +15,8 @@ from tkinter import filedialog, messagebox
 
 from PIL import Image, ImageDraw
 
-from widgets import PICTRUE, MAIN_BG, SEARCH_BG, load_image, to_photo, cover_crop
+from widgets import PICTRUE, MAIN_BG, SEARCH_BG, FONT_FAMILY, load_image, \
+    to_photo, cover_crop
 
 DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "music")
 
@@ -93,7 +94,7 @@ class ThemeDialog(tk.Toplevel):
         self.on_change = on_change
         self.configure(bg="#FFFFFF")
 
-        tk.Label(self, text="选择主题色", font=("微软雅黑", 18, "bold"),
+        tk.Label(self, text="选择主题色", font=(FONT_FAMILY, 18, "bold"),
                  bg="#FFFFFF", fg="#1F2430").place(x=24, y=20)
 
         card = tk.Frame(self, bg="#F7F8FA", highlightthickness=1,
@@ -114,9 +115,9 @@ class ThemeDialog(tk.Toplevel):
                           outline="#D4D8DE", width=1 if not active else 2)
             c.create_oval(12, 12, 68, 68, fill=color, outline="")
             c.create_text(40, 100, text=name, fill="#6B7280",
-                          font=("微软雅黑", 11))
+                          font=(FONT_FAMILY, 11))
             c.bind("<Button-1>", lambda e, col=color: self._pick(col))
-        tk.Label(self, text="设置后立即生效", font=("微软雅黑", 10),
+        tk.Label(self, text="设置后立即生效", font=(FONT_FAMILY, 10),
                  bg="#FFFFFF", fg="#9AA3B0").place(x=24, y=262)
 
         self.center()
@@ -140,16 +141,16 @@ class StorageDialog(tk.Toplevel):
         self.resizable(False, False)
         self.configure(bg="#FFFFFF")
 
-        tk.Label(self, text="设置默认存储位置", font=("微软雅黑", 18, "bold"),
+        tk.Label(self, text="设置默认存储位置", font=(FONT_FAMILY, 18, "bold"),
                  bg="#FFFFFF", fg="#1F2430").place(x=24, y=20)
 
         card = tk.Frame(self, bg="#F7F8FA", highlightthickness=1,
                         highlightbackground="#E7E9EE")
         card.place(x=24, y=70, width=472, height=120)
 
-        tk.Label(card, text="存储位置：", font=("微软雅黑", 12),
+        tk.Label(card, text="存储位置：", font=(FONT_FAMILY, 12),
                  bg="#F7F8FA", fg="#5A6472").place(x=20, y=42)
-        self.entry = ttk.Entry(card, font=("微软雅黑", 11), state="readonly")
+        self.entry = ttk.Entry(card, font=(FONT_FAMILY, 11), state="readonly")
         self.entry.place(x=106, y=36, width=240, height=36)
         ttk.Button(card, text="选择...", command=self._choose,
                    style="Accent.TButton").place(x=360, y=36, width=92, height=36)
@@ -193,22 +194,22 @@ class LocalScanDialog(tk.Toplevel):
                         highlightbackground="#E7E9EE")
         card.place(relx=0.5, rely=0.5, anchor="center", width=600, height=230)
 
-        tk.Label(card, text="扫描本地音乐", font=("微软雅黑", 18, "bold"),
+        tk.Label(card, text="扫描本地音乐", font=(FONT_FAMILY, 18, "bold"),
                  bg="#FFFFFF", fg="#1F2430").place(x=24, y=16)
 
-        self.label1 = tk.Label(card, text="选择文件夹：", font=("微软雅黑", 12),
+        self.label1 = tk.Label(card, text="选择文件夹：", font=(FONT_FAMILY, 12),
                                bg="#FFFFFF", fg="#5A6472")
         self.label1.place(x=24, y=70)
-        self.text = ttk.Entry(card, font=("微软雅黑", 11), state="readonly")
+        self.text = ttk.Entry(card, font=(FONT_FAMILY, 11), state="readonly")
         self.text.place(x=130, y=66, width=292, height=34)
         self.btn_choose = ttk.Button(card, text="选择...", command=self._choose,
                                      style="Accent.TButton")
         self.btn_choose.place(x=436, y=64, width=112, height=36)
 
-        self.status = tk.Label(card, text="", font=("微软雅黑", 11),
+        self.status = tk.Label(card, text="", font=(FONT_FAMILY, 11),
                                bg="#FFFFFF", fg="#1F2430", anchor="w")
         self.status.place(x=24, y=112)
-        self.now = tk.Label(card, text="", font=("微软雅黑", 11), anchor="w",
+        self.now = tk.Label(card, text="", font=(FONT_FAMILY, 11), anchor="w",
                             bg="#FFFFFF", fg="#9AA3B0")
         self.now.place(x=170, y=112, width=380)
 
@@ -314,11 +315,11 @@ class QueueDialog(tk.Toplevel):
         self._on_play = on_play
         self._on_clear = on_clear
 
-        tk.Label(self, text="播放队列", font=("微软雅黑", 16, "bold"),
+        tk.Label(self, text="播放队列", font=(FONT_FAMILY, 16, "bold"),
                  bg="#FFFFFF", fg="#1F2430").place(x=18, y=14)
 
         self._list = tk.Listbox(self, bg="#FFFFFF", fg="#1F2430",
-                                font=("微软雅黑", 11), bd=0,
+                                font=(FONT_FAMILY, 11), bd=0,
                                 highlightthickness=0, selectbackground="#E7F8EE",
                                 selectforeground="#0F9D4A", activestyle="none")
         self._list.place(x=16, y=52, width=328, height=330)

@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 音乐下载器 (Python 复刻版)
 对应原 Java Swing 项目 MusicPlayer 的 Maininterface / Function / Search / SlidePanel
@@ -13,6 +13,7 @@ Java 的 setOpaque(false) 透明效果。
 import os
 import queue
 import re
+import sys
 import tempfile
 import threading
 import time
@@ -27,17 +28,31 @@ from widgets import PICTRUE, load_image, BgLabel, \
     ImagePanel, Carousel, RecommendGrid, ImageCheckList, ImageList, \
     apply_tk_theme, LyricsPanel, ProgressBar, BORDER_HEX, \
     round_cover_photo, placeholder_cover
+from engine import CrossPlatformEngine, open_path
 import dialogs
 import widgets
 from lyrics import parse_lrc, read_uslt, read_cover, fetch_lyrics, save_lrc
 
 
+def ui_font(*sizes):
+    """按平台返回中文字体族: macOS 用苹方, 其余用微软雅黑。"""
+    family = "PingFang SC" if sys.platform == "darwin" else "微软雅黑"
+    return (family,) + tuple(sizes)
+
+
+def symbol_font(*sizes):
+    """按平台返回符号字体族: macOS 用 Apple Symbols, Windows 用 Segoe UI Symbol。"""
+    family = "Apple Symbols" if sys.platform == "darwin" else "Segoe UI Symbol"
+    return (family,) + tuple(sizes)
+
+
 def init_global_font():
-    """全局微软雅黑 (现代中文 UI 标准)。"""
+    """全局中文字体 (macOS 苹方 / Windows 微软雅黑)。"""
+    family = "PingFang SC" if sys.platform == "darwin" else "微软雅黑"
     for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont",
                  "TkHeadingFont", "TkCaptionFont", "TkIconFont"):
         try:
-            tkfont.nametofont(name).configure(family="微软雅黑", size=11)
+            tkfont.nametofont(name).configure(family=family, size=11)
         except Exception:  # noqa: BLE001
             pass
 
@@ -98,7 +113,7 @@ class _CircleBtn(tk.Canvas):
 
     def __init__(self, master, glyph, command, size=40, bg="#FFFFFF",
                  fill="#F3F4F6", active="#E4E7EC", fg="#3A424C",
-                 font=("Segoe UI Symbol", 14)):
+                 font=symbol_font(14)):
         super().__init__(master, width=size, height=size, bg=bg,
                          highlightthickness=0, bd=0, cursor="hand2")
         self._size = size
@@ -137,7 +152,7 @@ class _NavItem(tk.Label):
 
     def __init__(self, menu, y, text, command):
         super().__init__(menu, text=text, anchor="w", cursor="hand2",
-                         font=("微软雅黑", 13, "bold"), padx=20)
+                         font=ui_font(13, "bold"), padx=20)
         self._bar = tk.Frame(menu, bg=widgets.ACCENT_HEX, width=3)
         self._cmd = command
         self._sel = False
@@ -166,127 +181,7 @@ class _NavItem(tk.Label):
             self._bar.place_forget()
 
 
-class _MciEngine:
-    """MCI 播放引擎 (winmm.mciSendString): 无需 WMP 组件, 依赖-free。
-
-    进程内播放, 不启动外部进程; 主线程任何阻塞都不会饿死音频管线,
-    从根上消除播放卡顿。音量通过 waveOutSetVolume 控制 (系统总音量)。
-    """
-
-    ALIAS = "appplay"
-
-    def __init__(self):
-        self.cmds = queue.Queue()
-        self.st = {"ok": False, "state": 0, "dur": 0.0, "pos": 0.0,
-                   "err": ""}
-        self._t = None
-
-    def start(self):
-        if self._t is not None:
-            return
-        self._t = threading.Thread(target=self._run, daemon=True)
-        self._t.start()
-
-    def _run(self):
-        import ctypes
-        mci = ctypes.windll.winmm.mciSendStringW
-
-        def send(cmd):
-            buf = ctypes.create_unicode_buffer(512)
-            r = mci(cmd, buf, 512, 0)
-            return r, buf.value
-
-        try:
-            r, _ = send("open new type waveaudio alias _test")
-            if r == 0:
-                send("close _test")
-            self.st["ok"] = True
-        except Exception as exc:  # noqa: BLE001
-            self.st["err"] = str(exc)
-            return
-
-        current_path = None
-        loaded_path = None
-
-        while True:
-            try:
-                cmd = self.cmds.get(timeout=0.25)
-            except queue.Empty:
-                cmd = None
-            try:
-                if cmd is not None:
-                    kind = cmd.get("kind")
-                    if kind == "play":
-                        if current_path:
-                            send("close %s" % self.ALIAS)
-                        path = cmd["path"]
-                        r, _ = send('open "%s" alias %s type mpegvideo'
-                                    % (path, self.ALIAS))
-                        if r == 0:
-                            send("set %s time format milliseconds"
-                                 % self.ALIAS)
-                            send("play %s" % self.ALIAS)
-                            current_path = path
-                            loaded_path = None      # 需重新取时长
-                        else:
-                            self.st["err"] = "MCI open failed: %d" % r
-                    elif kind == "pause":
-                        send("pause %s" % self.ALIAS)
-                    elif kind == "resume":
-                        send("play %s" % self.ALIAS)
-                    elif kind == "seek":
-                        ms = int(float(cmd["v"]) * 1000)
-                        send("seek %s to %d" % (self.ALIAS, ms))
-                        send("play %s" % self.ALIAS)
-                    elif kind == "setvol":
-                        vol = int(float(cmd["v"]))
-                        vol16 = max(0, min(65535, vol * 65535 // 100))
-                        ctypes.windll.winmm.waveOutSetVolume(
-                            0, vol16 | (vol16 << 16))
-                    elif kind == "stop":
-                        send("stop %s" % self.ALIAS)
-                        current_path = None
-                        loaded_path = None
-                        self.st["dur"] = 0.0
-                    elif kind == "shutdown":
-                        break
-            except Exception as exc:  # noqa: BLE001
-                self.st["err"] = str(exc)
-            # 状态轮询: 仅在已加载曲目时执行, 避免空闲期空转 MCI
-            if current_path:
-                try:
-                    _, mode = send("status %s mode" % self.ALIAS)
-                    mode = mode.lower().strip()
-                    self.st["state"] = (3 if mode == "playing" else
-                                        2 if mode == "paused" else
-                                        1 if mode == "stopped" else 0)
-                    _, pos_s = send("status %s position" % self.ALIAS)
-                    self.st["pos"] = float(pos_s) / 1000.0 if pos_s else 0.0
-                    if loaded_path != current_path:
-                        _, len_s = send("status %s length" % self.ALIAS)
-                        if len_s:
-                            self.st["dur"] = float(len_s) / 1000.0
-                        loaded_path = current_path
-                except Exception:  # noqa: BLE001
-                    pass
-
-    def play(self, path):
-        self.cmds.put({"kind": "play", "path": path})
-
-    def pause(self):
-        self.cmds.put({"kind": "pause"})
-
-    def resume(self):
-        self.cmds.put({"kind": "resume"})
-
-    def seek(self, v):
-        self.cmds.put({"kind": "seek", "v": v})
-
-    def setvol(self, v):
-        self.cmds.put({"kind": "setvol", "v": v})
-
-    def stop(self):
-        self.cmds.put({"kind": "stop"})
+_MciEngine = CrossPlatformEngine  # 跨平台引擎 (原 winmm 已迁移至 engine.py)
 
 
 class MainWindow:
@@ -322,8 +217,8 @@ class MainWindow:
         self.local_paths = []           # 与本地列表同步的真实文件路径
         self._ui_queue = queue.Queue()   # 线程 -> 主线程 UI 回调队列
 
-        # ---- 播放引擎 (MCI winmm): 进程内播放, 无外部进程, 无 WMP 依赖
-        self._engine = _MciEngine()
+        # ---- 播放引擎 (跨平台, pygame.mixer): 进程内播放
+        self._engine = CrossPlatformEngine()
         self._engine.start()
         self._pb_playlist = []
         self._pb_idx = -1
@@ -416,11 +311,11 @@ class MainWindow:
         c = self.logo_box
         c.create_oval(24, 26, 24 + 44, 26 + 44, fill=widgets.ACCENT_HEX, outline="")
         c.create_text(46, 48, text="♪", fill="#FFFFFF",
-                      font=("Segoe UI Symbol", 24))
+                      font=symbol_font(24))
         c.create_text(78, 36, text="音乐下载器", fill="#1F2430",
-                      font=("微软雅黑", 15, "bold"), anchor="w")
+                      font=ui_font(15, "bold"), anchor="w")
         c.create_text(78, 62, text="Music Player", fill="#9AA3B0",
-                      font=("微软雅黑", 10), anchor="w")
+                      font=ui_font(10), anchor="w")
 
     # ------------------------------- 主区域 (X=200, 800px)
     def _build_main(self):
@@ -460,7 +355,7 @@ class MainWindow:
         self.music_panel = ImagePanel(self.main, kind="main")
         self.music_panel.place(x=0, y=0, width=800, height=472)
         tk.Label(self.music_panel, text="下载管理", bg="#FFFFFF",
-                 fg="#1F2430", font=("微软雅黑", 16, "bold"),
+                 fg="#1F2430", font=ui_font(16, "bold"),
                  anchor="w").place(x=20, y=12, width=200, height=32)
         self.download_list = ImageList(self.music_panel, 800, 416,
                                        on_double=self.on_download_play)
@@ -470,7 +365,7 @@ class MainWindow:
         self.music_panel2 = ImagePanel(self.main, kind="main")
         self.music_panel2.place(x=0, y=0, width=800, height=472)
         tk.Label(self.music_panel2, text="本地音乐", bg="#FFFFFF",
-                 fg="#1F2430", font=("微软雅黑", 16, "bold"),
+                 fg="#1F2430", font=ui_font(16, "bold"),
                  anchor="w").place(x=20, y=12, width=200, height=32)
         self.local_list = ImageList(self.music_panel2, 800, 416,
                                     on_double=self.on_local_play)
@@ -504,17 +399,17 @@ class MainWindow:
         pill.create_oval(356, 0, 392, 36, fill="#F3F4F6", outline="", width=0)
 
         self.box = ttk.Combobox(sp, values=["陈奕迅"],
-                                font=("微软雅黑", 12), style="Search.TCombobox")
+                                font=ui_font(12), style="Search.TCombobox")
         self.box.set("陈奕迅")
         self.box.place(x=28, y=18, width=288, height=28)
         self.box.bind("<Return>", lambda e: self.on_search())
         self.box.bind("<<ComboboxSelected>>", lambda e: self.on_search())
 
-        self.btn_search = _CircleBtn(sp, "\uD83D\uDD0D", self.on_search,
+        self.btn_search = _CircleBtn(sp, "\U0001F50D", self.on_search,
                                      size=30, fill=widgets.ACCENT_HEX,
                                      active=widgets.ACCENT_DK_HEX,
                                      fg="#FFFFFF", bg="#F3F4F6",
-                                     font=("Segoe UI Symbol", 11))
+                                     font=symbol_font(11))
         self.btn_search.place(x=354, y=19, width=30, height=30)
 
     def _build_control_bar(self):
@@ -541,7 +436,7 @@ class MainWindow:
         btn(184, "播放", self.on_play_online)
         btn(272, "加入队列", self.on_add_queue)
         tk.Label(bar, text="滚动到底部自动加载更多", bg="#F7F8FA",
-                 fg="#9AA3B0", font=("微软雅黑", 10)).place(x=368, y=10)
+                 fg="#9AA3B0", font=ui_font(10)).place(x=368, y=10)
 
     def _build_top_right(self):
         """右上角 4 个圆角图标按钮 (设置/下载/最小化/关闭)。"""
@@ -549,19 +444,19 @@ class MainWindow:
         y0 = 14
         btn = _CircleBtn(self.root, "\u2699", self.on_settings,
                          size=32, fill="#FFFFFF", active="#EEF0F3",
-                         fg="#5A6472", bg="#F7F8FA", font=("Segoe UI Symbol", 13))
+                         fg="#5A6472", bg="#F7F8FA", font=symbol_font(13))
         btn.place(x=x0, y=y0, width=32, height=32)
         btn2 = _CircleBtn(self.root, "\u2B07", self.show_download_panel,
                           size=32, fill="#FFFFFF", active="#EEF0F3",
-                          fg="#5A6472", bg="#F7F8FA", font=("Segoe UI Symbol", 13))
+                          fg="#5A6472", bg="#F7F8FA", font=symbol_font(13))
         btn2.place(x=x0 + 40, y=y0, width=32, height=32)
         btn3 = _CircleBtn(self.root, "\u2013", self.minimize,
                           size=32, fill="#FFFFFF", active="#EEF0F3",
-                          fg="#5A6472", bg="#F7F8FA", font=("Segoe UI Symbol", 13))
+                          fg="#5A6472", bg="#F7F8FA", font=symbol_font(13))
         btn3.place(x=x0 + 80, y=y0, width=32, height=32)
         btn4 = _CircleBtn(self.root, "\u00D7", self.exit_app,
                           size=32, fill="#FFFFFF", active="#FDE8E9",
-                          fg="#E5484D", bg="#F7F8FA", font=("Segoe UI Symbol", 14))
+                          fg="#E5484D", bg="#F7F8FA", font=symbol_font(14))
         btn4.place(x=x0 + 120, y=y0, width=32, height=32)
 
     # ------------------------------- 底部播放条 (浅色)
@@ -576,7 +471,7 @@ class MainWindow:
         self._pb_cover.place(x=14, y=8, width=48, height=48)
         self._pb_cover_ph = None
         self._pb_track = tk.Label(bar, text="未在播放", bg="#FFFFFF",
-                                  fg="#1F2430", font=("微软雅黑", 12, "bold"),
+                                  fg="#1F2430", font=ui_font(12, "bold"),
                                   anchor="w")
         self._pb_track.place(x=70, y=8, width=190, height=48)
 
@@ -584,39 +479,39 @@ class MainWindow:
         self._pb_btn_prev = _CircleBtn(bar, "\u23EE", lambda: self._pb_prev_next(-1),
                                        size=40, fill="#F3F4F6", active="#E4E7EC",
                                        fg="#3A424C", bg="#FFFFFF",
-                                       font=("Segoe UI Symbol", 13))
+                                       font=symbol_font(13))
         self._pb_btn_prev.place(x=268, y=12, width=40, height=40)
         self._pb_btn_play = _CircleBtn(bar, "\u25B6", self._pb_toggle,
                                        size=44, fill=widgets.ACCENT_HEX, active=widgets.ACCENT_DK_HEX,
 fg="#FFFFFF", bg="#FFFFFF",
-                                       font=("Segoe UI Symbol", 14))
+                                       font=symbol_font(14))
         self._pb_btn_play.place(x=312, y=10, width=44, height=44)
         self._pb_btn_next = _CircleBtn(bar, "\u23ED", lambda: self._pb_prev_next(1),
                                        size=40, fill="#F3F4F6", active="#E4E7EC",
                                        fg="#3A424C", bg="#FFFFFF",
-                                       font=("Segoe UI Symbol", 13))
+                                       font=symbol_font(13))
         self._pb_btn_next.place(x=360, y=12, width=40, height=40)
 
         # 播放模式 (顺序/列表循环/单曲循环/随机) — 与传输三键同组
-        self._pb_btn_mode = _CircleBtn(bar, "\uD83D\uDD01", self._pb_cycle_mode,
+        self._pb_btn_mode = _CircleBtn(bar, "\U0001F501", self._pb_cycle_mode,
                                        size=28, fill="#F3F4F6", active="#E4E7EC",
                                        fg="#3A424C", bg="#FFFFFF",
-                                       font=("Segoe UI Symbol", 12))
+                                       font=symbol_font(12))
         self._pb_btn_mode.place(x=406, y=18, width=28, height=28)
 
         # 进度 + 时间
         self._pb_time = tk.Label(bar, text="0:00 / 0:00", bg="#FFFFFF",
-                                 fg="#6B7280", font=("微软雅黑", 10))
+                                 fg="#6B7280", font=ui_font(10))
         self._pb_time.place(x=440, y=6, width=310)
         self._pb_progress = ProgressBar(bar, width=310, height=18,
                                         command=self._pb_seek, bg="#FFFFFF")
         self._pb_progress.place(x=440, y=32, width=310, height=18)
 
         # 音量 (静音按钮 + 滑杆)
-        self._pb_btn_mute = _CircleBtn(bar, "\uD83D\uDD0A", self._pb_toggle_mute,
+        self._pb_btn_mute = _CircleBtn(bar, "\U0001F50A", self._pb_toggle_mute,
                                        size=28, fill="#F3F4F6", active="#E4E7EC",
                                        fg="#3A424C", bg="#FFFFFF",
-                                       font=("Segoe UI Symbol", 12))
+                                       font=symbol_font(12))
         self._pb_btn_mute.place(x=764, y=18, width=28, height=28)
         self._pb_vol = ttk.Scale(bar, from_=0, to=100, value=50,
                                  style="TScale", command=self._pb_on_vol,
@@ -1007,7 +902,7 @@ fg="#FFFFFF", bg="#FFFFFF",
 
     # ============================================================== 播放引擎
     def _open_external(self):
-        """手动把当前歌曲交给“系统播放器”打开 (仅用户点击“外部”按钮时启动)。"""
+        """手动把当前歌曲交给"系统播放器"打开 (仅用户点击"外部"按钮时启动)。"""
         if not self._pb_path:
             return
         self._pb_ext = True
@@ -1016,10 +911,8 @@ fg="#FFFFFF", bg="#FFFFFF",
             self._pb_progress.configure(state="disabled")
         except Exception:  # noqa: BLE001
             pass
-        try:
-            os.startfile(self._pb_path)
-        except Exception as exc:  # noqa: BLE001
-            print("外部播放失败:", exc)
+        if not open_path(self._pb_path):
+            print("外部播放失败: 无法打开文件")
             messagebox.showerror("错误", "无法用系统播放器打开歌曲")
             self._pb_ext = False
             return
@@ -1220,7 +1113,7 @@ fg="#FFFFFF", bg="#FFFFFF",
         self._play_path(self._pb_playlist[self._pb_idx])
 
     # ------------------------------------------------------ 播放模式
-    MODE_ICONS = ("\u23F9", "\uD83D\uDD01", "\uD83D\uDD02", "\uD83D\uDD00")
+    MODE_ICONS = ("\u23F9", "\U0001F501", "\U0001F502", "\U0001F500")
     MODE_NAMES = ("顺序播放", "列表循环", "单曲循环", "随机播放")
 
     def _pb_cycle_mode(self):
@@ -1268,7 +1161,7 @@ fg="#FFFFFF", bg="#FFFFFF",
             if self._pb_muted:
                 self._pb_muted = False
                 if self._pb_btn_mute is not None:
-                    self._pb_btn_mute.set_glyph("\uD83D\uDD0A")
+                    self._pb_btn_mute.set_glyph("\U0001F50A")
             try:
                 self._engine.setvol(v)
             except Exception:  # noqa: BLE001
@@ -1282,12 +1175,12 @@ fg="#FFFFFF", bg="#FFFFFF",
                 self._pb_muted = False
                 self._engine.setvol(self._pb_vol_prev)
                 self._pb_vol.set(self._pb_vol_prev)
-                self._pb_btn_mute.set_glyph("\uD83D\uDD0A")
+                self._pb_btn_mute.set_glyph("\U0001F50A")
             else:
                 self._pb_muted = True
                 self._pb_vol_prev = int(self._pb_vol.get() or 50)
                 self._engine.setvol(0)
-                self._pb_btn_mute.set_glyph("\uD83D\uDD07")
+                self._pb_btn_mute.set_glyph("\U0001F507")
             self._save_settings()
 
     def _poll_player(self):
@@ -1478,14 +1371,23 @@ fg="#FFFFFF", bg="#FFFFFF",
         self._taskbar_minimize()
 
     def _taskbar_minimize(self):
-        """无托盘时: 临时加回系统边框再最小化, 让窗口进任务栏。"""
+        """无托盘时最小化: macOS 到 Dock / Windows 到任务栏。
+
+        无边框窗口直接 iconify 在多数平台上不可靠, 先临时加回系统
+        装饰再最小化 (macOS 上 overrideredirect 切换失败则直接 iconify)。
+        """
         self._taskbar_min = (self.root.winfo_x(), self.root.winfo_y())
         self._minimizing = True
         try:
             self.root.overrideredirect(False)
-            self.root.update_idletasks()   # 让系统先拿到带边框的新窗口样式
+            self.root.update_idletasks()   # 先让系统拿到带边框的新样式
             self.root.iconify()
         except tk.TclError:
+            try:
+                # macOS: 可能无法动态去掉 overrideredirect -> 直接最小化
+                self.root.iconify()
+            except tk.TclError:
+                pass
             self._minimizing = False
             try:
                 self.root.overrideredirect(True)

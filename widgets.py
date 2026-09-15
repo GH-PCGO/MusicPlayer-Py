@@ -12,6 +12,7 @@ import base64
 import io as _io
 import os
 import re
+import sys
 import tkinter as tk
 import tkinter.ttk as ttk
 
@@ -23,8 +24,8 @@ PICTRUE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Pictrue")
 MAIN_BG = os.path.join(PICTRUE, "logo.jpg")
 SEARCH_BG = os.path.join(PICTRUE, "logo.jpg")
 
-# 全局字号 (现代 UI 用微软雅黑)
-FONT_FAMILY = "微软雅黑"
+# 全局字号 (macOS 苹方 / Windows 微软雅黑)
+FONT_FAMILY = "PingFang SC" if sys.platform == "darwin" else "微软雅黑"
 DEFAULT_SIZE = 13
 ROW_H = 46
 HEADER_H = 44
@@ -195,15 +196,29 @@ def _font(size, bold=False):
     f = _font_cache.get(key)
     if f is not None:
         return f
-    name = "msyhbd.ttc" if bold else "msyh.ttc"
-    try:
-        ttc = os.path.join(os.environ.get("WINDIR", "C:/Windows"), "Fonts", name)
-        f = ImageFont.truetype(ttc, size)
-    except Exception:  # noqa: BLE001
+    if sys.platform == "darwin":      # macOS 字体路径
+        cands = [
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/STHeiti Light.ttc",
+            "/System/Library/Fonts/STHeiti Medium.ttc",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            "/System/Library/Fonts/Supplemental/Songti.ttc",
+        ]
+    else:                             # Windows 微软雅黑
+        windir = os.environ.get("WINDIR", "C:/Windows")
+        name = "msyhbd.ttc" if bold else "msyh.ttc"
+        cands = [os.path.join(windir, "Fonts", name)]
+    for ttc in cands:
         try:
-            f = ImageFont.truetype(name, size)
+            f = ImageFont.truetype(ttc, size)
+            _font_cache[key] = f
+            return f
         except Exception:  # noqa: BLE001
-            f = ImageFont.load_default()
+            continue
+    try:
+        f = ImageFont.truetype("arial.ttf", size)
+    except Exception:  # noqa: BLE001
+        f = ImageFont.load_default()
     _font_cache[key] = f
     return f
 
@@ -297,7 +312,7 @@ def apply_tk_theme(root):
     except Exception:  # noqa: BLE001
         pass
     try:
-        s.configure(".", font=("微软雅黑", 11))
+        s.configure(".", font=(FONT_FAMILY, 11))
         # ---- 普通按钮: 白底细边 ----
         s.configure("TButton", background="#FFFFFF", foreground="#1F2430",
                     bordercolor="#E4E7EC", focusthickness=0,
@@ -431,6 +446,23 @@ class Carousel(tk.Frame):
 
 
 # ============================================================== 滚动列表
+def _wheel_units(event):
+    """把不同平台的滚轮事件 delta 归一化为滚动行数。
+
+    Windows/Linux: 每格 ±120; macOS: 鼠标滚轮 ±1 级小整数 /
+    触控板像素级 (常 ±10~±300), 折算成每 ~40 像素滚 1 行。
+    """
+    if sys.platform == "darwin":
+        d = event.delta
+        if abs(d) < 2:
+            n = 1 if d else 0
+        else:
+            n = max(1, int(abs(d) / 40))
+        return -n if d > 0 else n
+    d = event.delta
+    return -int(d / 120) if d else 0
+
+
 class _BgCanvasList(tk.Frame):
     """滚动列表基类: 顶部列头 + 白/绿底行 (hover 浅灰, 选中=音乐绿)。"""
 
@@ -504,7 +536,7 @@ class _BgCanvasList(tk.Frame):
         self._rebuild()
 
     def _wheel(self, event):
-        self.canvas.yview_scroll(int(-event.delta / 120), "units")
+        self.canvas.yview_scroll(_wheel_units(event), "units")
         self._maybe_load_more()
 
     def _maybe_load_more(self):
@@ -723,7 +755,7 @@ class RecommendGrid(tk.Frame):
         self._draw()
 
     def _wheel(self, event):
-        self.canvas.yview_scroll(int(-event.delta / 120), "units")
+        self.canvas.yview_scroll(_wheel_units(event), "units")
 
     def _cell(self, art_path, text):
         """透明卡: 圆角白卡 + 内缩 1:1 封面 + 底部固定歌名区 (无双层圆角打架)。"""
@@ -888,8 +920,8 @@ class LyricsPanel(tk.Frame):
     _TITLE   = "#1F2430"
     _SUB     = "#6B7280"
     _LINE_H  = 40
-    _FONT_CUR = ("微软雅黑", 20, "bold")
-    _FONT_FAR = ("微软雅黑", 13)
+    _FONT_CUR = (FONT_FAMILY, 20, "bold")
+    _FONT_FAR = (FONT_FAMILY, 13)
 
     def __init__(self, master, width=800, height=600, **kw):
         super().__init__(master, bg=self._BG, **kw)
@@ -902,10 +934,10 @@ class LyricsPanel(tk.Frame):
         self._hdr.place(x=0, y=0, width=width, height=70)
         tk.Label(self._hdr, textvariable=self._title_var,
                  bg=self._BG, fg=self._TITLE,
-                 font=("微软雅黑", 15, "bold")).place(relx=0.5, y=20, anchor="center")
+                 font=(FONT_FAMILY, 15, "bold")).place(relx=0.5, y=20, anchor="center")
         tk.Label(self._hdr, textvariable=self._artist_var,
                  bg=self._BG, fg=self._SUB,
-                 font=("微软雅黑", 11)).place(relx=0.5, y=48, anchor="center")
+                 font=(FONT_FAMILY, 11)).place(relx=0.5, y=48, anchor="center")
         tk.Frame(self._hdr, bg=BORDER_HEX, height=1).place(
             x=24, y=68, relwidth=1.0, width=width - 48)
 
@@ -1033,7 +1065,7 @@ class LyricsPanel(tk.Frame):
         for i, t in enumerate(lines):
             y = top + i * step
             c.create_text(self._W // 2, y, text=t,
-                          fill=self._DIM, font=("微软雅黑", 12), anchor="center")
+                          fill=self._DIM, font=(FONT_FAMILY, 12), anchor="center")
 
     # ---------------------------------------------------------- 动画
     def _start_anim(self):
@@ -1071,7 +1103,7 @@ class LyricsPanel(tk.Frame):
         c.delete("all")
         c.create_text(self._W // 2, (self._H - 70) // 2,
                       text=self._blank_msg or "暂无歌词",
-                      fill=self._DIM, font=("微软雅黑", 15), anchor="center")
+                      fill=self._DIM, font=(FONT_FAMILY, 15), anchor="center")
 
     def _draw_frame(self):
         c = self._canvas
@@ -1096,7 +1128,7 @@ class LyricsPanel(tk.Frame):
                 edge = max(0.0, (canvas_h - y) / margin)
             if dist < 0.5:
                 # --- 真正的当前行: 浅绿光晕 + 深绿加粗 ---
-                glow_font = ("微软雅黑", 24, "bold")
+                glow_font = (FONT_FAMILY, 24, "bold")
                 c.create_text(self._W // 2 + 1, y + 2,
                               text=self._lines[i][1],
                               font=glow_font,
@@ -1105,7 +1137,7 @@ class LyricsPanel(tk.Frame):
                 c.create_text(self._W // 2, y,
                               text=self._lines[i][1],
                               fill=self._CUR_TXT,
-                              font=("微软雅黑", 22, "bold"),
+                              font=(FONT_FAMILY, 22, "bold"),
                               anchor="center")
             else:
                 sz = int(12 + 8 * w)
@@ -1118,7 +1150,7 @@ class LyricsPanel(tk.Frame):
                 c.create_text(self._W // 2, y,
                               text=self._lines[i][1],
                               fill=fill,
-                              font=("微软雅黑", sz, "normal"),
+                              font=(FONT_FAMILY, sz, "normal"),
                               anchor="center")
 
     def destroy(self):

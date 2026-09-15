@@ -1,0 +1,6 @@
+# 跨平台音乐播放器依赖
+pillow>=9.0       # 封面/背景图处理
+requests>=2.28    # 酷我/歌词接口
+pygame>=2.3       # 跨平台音频播放引擎 (macOS/Windows/Linux)
+mutagen>=1.46     # MP3 时长/标签读取 (可选, 增强)
+pystray>=0.19     # 系统托盘 (可选)
