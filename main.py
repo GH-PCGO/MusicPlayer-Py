@@ -368,7 +368,7 @@ class MainWindow:
         threading.Thread(target=self._load_download_dir, daemon=True).start()
 
         # 主线程轮询执行工作线程发来的 UI 更新 (Tk 非线程安全, 不能跨线程 after)
-        self.root.after(150, self._poll_ui)
+        self.root.after(250, self._poll_ui)
         self.root.after(200, self._poll_player)
 
         self.root.mainloop()
@@ -387,6 +387,8 @@ class MainWindow:
         self._build_playbar()
         self._bind_drag_all()
         self.show_home()
+        # 启动优化: 推荐卡片较重, 等窗口首帧显示后再绘制
+        self.root.after(120, self.recommend_grid.draw_deferred)
 
     def _bind_drag_all(self):
         """让无边框窗口在更大区域可拖拽 (面板空白/播放条/表头等)。"""

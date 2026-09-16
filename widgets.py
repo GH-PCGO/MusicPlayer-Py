@@ -109,8 +109,24 @@ def refresh_all_theme():
             pass
 
 
+_HAS_IMAGETK = None
+
+
 def to_photo(img):
-    """把 PIL 图像转成真正的 tk.PhotoImage (base64 PNG 重建)。"""
+    """把 PIL 图像转成 tk.PhotoImage (优先 ImageTk, 缺失时回落 base64 PNG)。"""
+    global _HAS_IMAGETK
+    if _HAS_IMAGETK is None:
+        try:
+            from PIL import ImageTk  # noqa: F401
+            _HAS_IMAGETK = True
+        except Exception:  # noqa: BLE001
+            _HAS_IMAGETK = False
+    if _HAS_IMAGETK:
+        try:
+            from PIL import ImageTk
+            return ImageTk.PhotoImage(img)
+        except Exception:  # noqa: BLE001
+            pass
     buf = _io.BytesIO()
     img.save(buf, format="PNG")
     return tk.PhotoImage(data=base64.b64encode(buf.getvalue()).decode("ascii"))
@@ -828,12 +844,17 @@ class RecommendGrid(tk.Frame):
         self._photos = []
         self._art = [os.path.join(PICTRUE, "L%d.jpg" % (i + 1))
                      for i in range(len(self.SONGS))]
-        self._draw()
+        self._drawn = False
+        # 不在构造时绘制 (20 张卡片合成较慢), 由主窗口在首帧后调用 draw_deferred
 
     def refresh(self):
-        self.canvas.delete("all")
-        self._photos = []
+        self._drawn = False
         self._draw()
+
+    def draw_deferred(self):
+        """首帧之后再绘制推荐卡片, 避免阻塞窗口显示 (启动优化)。"""
+        if not self._drawn:
+            self._draw()
 
     def _wheel(self, event):
         self.canvas.yview_scroll(_wheel_units(event), "units")
@@ -876,6 +897,9 @@ class RecommendGrid(tk.Frame):
         return to_photo(img)
 
     def _draw(self):
+        self.canvas.delete("all")
+        self._photos = []
+        self._drawn = True
         total_h = self.ROWS * self.CELL_H + (self.ROWS - 1) * self.GAP + 30
         pad_x = (self.width - (self.COLS * self.CELL_W + (self.COLS - 1) * self.GAP)) // 2
         for i, name in enumerate(self.SONGS):
