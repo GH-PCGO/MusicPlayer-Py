@@ -77,6 +77,12 @@ MusicPlayer-Py/
 ├── run.py                   # 便捷启动 (把 src 加入 sys.path)
 ├── tests/
 │   └── test_core.py         # 纯逻辑单元测试 (pytest 兼容)
+├── packaging/               # 打包为 Windows 安装程序 (见"打包"节)
+│   ├── MusicPlayer.spec     # 应用本体 PyInstaller 配置 (onedir)
+│   ├── installer.spec       # 安装程序配置 (onefile, 内嵌 payload)
+│   ├── entry.py             # 冻结/源码双模式入口
+│   ├── installer.py         # 自研 Tk 安装器 (安装/卸载/快捷方式/注册表)
+│   └── build.py             # 一键打包 (生成图标 + 应用 + 安装程序)
 └── src/
     └── musicplayer/
         ├── __init__.py
@@ -93,6 +99,22 @@ MusicPlayer-Py/
 ```
 
 数据目录（`paths.py`）：源码布局下 `music/`（下载）与 `settings.json` 位于**项目根**；已安装布局下位于 `~/MusicPlayer/`。资产固定随包（`assets/Pictrue`）。
+
+## 打包为 Windows 可安装程序
+
+需要 `pip install pyinstaller`（应用还依赖 `pywin32`、`Pillow`、`requests`，打包含自动收集）。
+
+```bash
+python packaging/build.py
+```
+
+- `[1/3]` 由 `assets/Pictrue/logo.jpg` 生成多尺寸 `packaging/app.ico`
+- `[2/3]` PyInstaller 打包应用本体 → `dist/MusicPlayer/`（onedir，`MusicPlayer.exe`）
+- `[3/3]` 打包安装程序 → `dist/MusicPlayerSetup.exe`（单文件，内嵌整个应用目录）
+
+把 `MusicPlayerSetup.exe` 拷到目标 **Windows 10/11** 机，运行即可选择安装位置、勾选桌面/开始菜单快捷方式；卸载走「设置 → 应用」或安装目录下的 `uninstall.bat`（带用户级卸载注册表项）。应用安装到任意目录后数据统一存 `~/MusicPlayer/`，播放引擎自动回退为系统 WinMM MCI，无需装 pygame。
+
+`packaging/installer.py` 为自研 Tk 安装器（`.spec` 打包，无 Inno/NSIS 依赖）：复制 payload、`WScript.Shell` 建快捷方式、写 `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\MusicPlayer-Py` 卸载项；命令行 `MusicPlayerSetup.exe --uninstall` 可静默卸载。
 
 ## 模块说明
 
@@ -163,6 +185,7 @@ MusicPlayer-Py/
   - **下载进度 + 失败重试**：`kuwo.download` 增 `on_progress(bytes)`，下载管理第 4 列实时显示「下载中 x.xMB → ✓ 完成 / 失败·双击重试」，失败行双击自动用记录的信息重下。
 - **启动优化**：`to_photo` 改用 `PIL.ImageTk.PhotoImage`（比 base64 PNG 重建更快，缺失时自动回落）；`RecommendGrid` 首屏 20 张卡片改为窗口首帧后延迟绘制（`draw_deferred`），列表填充延后到 `_poll_ui`（250ms）。`MainWindow` 构造 ~1.03s → ~0.75s。
 - **项目结构重构为标准 src 布局**：源码移入 `src/musicplayer/`（`main.py`→`app.py`，图像资源移至 `assets/Pictrue/`），新增 `paths.py`（资产/数据目录解析，兼容源码与已安装布局）、`util.py`、`__init__.py`、`__main__.py`；根目录新增 `run.py` 与 `pyproject.toml`（含 `musicplayer` 控制台脚本）、`tests/test_core.py`（pytest 兼容纯逻辑测试，顺带修复 `parse_lrc` 同行多时间戳切片偏移 bug）；模块内导入改为相对导入。支持 `python run.py`、`pip install -e .` 后 `musicplayer` / `python -m musicplayer`。
+- **打包为 Windows 10 可安装程序**：新增 `packaging/`（`MusicPlayer.spec` 应用 onedir + `installer.spec` 安装器 onefile + `installer.py` 自研 Tk 安装器 + `build.py` 一键构建）。`build.py` 先用 PIL 由 logo 生成多尺寸 `app.ico`，再依次打包应用与安装程序；安装器内嵌整个应用目录，支持选择安装位置、桌面/开始菜单快捷方式、HKCU 卸载注册表项与 `uninstall.bat`，并支持 `--uninstall` 静默卸载。实测：应用 exe 正常启动、`MusicPlayerSetup.exe` 界面正常（路径框加宽至满行并定位末尾，完整显示默认安装路径）、安装/注册表/卸载项全链路通过；已安装布局下数据统一落到 `~/MusicPlayer/`（`_save_settings` 自动建目录），打包后引擎自动回退 WinMM MCI 无需 pygame。
 
 ## 提示
 

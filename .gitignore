@@ -17,6 +17,9 @@ settings.json
 music/
 *.lrc
 
+# 打包产物（由 packaging/build.py 生成）
+packaging/app.ico
+
 # 虚拟环境
 .venv/
 venv/

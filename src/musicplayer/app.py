@@ -1799,6 +1799,9 @@ class MainWindow:
         """保存播放模式/音量/静音/音质到 settings.json。"""
         import json
         try:
+            d = os.path.dirname(self._settings_path)
+            if d:
+                os.makedirs(d, exist_ok=True)
             data = {"mode": int(self._pb_mode),
                     "volume": int(self._pb_vol_val),
                     "muted": bool(self._pb_muted),
