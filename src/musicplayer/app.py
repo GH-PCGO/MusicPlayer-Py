@@ -27,12 +27,12 @@ import requests
 from .widgets import PICTRUE, load_image, BgLabel, \
     ImagePanel, Carousel, RecommendGrid, ImageCheckList, ImageList, \
     apply_tk_theme, LyricsPanel, ProgressBar, BORDER_HEX, \
-    round_cover_photo, placeholder_cover
+    round_cover_photo, placeholder_cover, to_photo
 from .engine import default_engine, MciEngine, open_path
 from . import dialogs
 from . import widgets
 from .util import split_artists
-from .paths import SETTINGS_PATH
+from .paths import SETTINGS_PATH, ASSETS_DIR
 from .lyrics import parse_lrc, read_uslt, read_cover, fetch_lyrics, save_lrc
 
 
@@ -284,6 +284,7 @@ class MainWindow:
         self.root.protocol("WM_DELETE_WINDOW", self.exit_app)
         self.root.bind("<Map>", self._on_map)
         self.center()
+        self._set_window_icon()   # 任务栏/最小化图标
 
         self.api = KuwoAPI()
         self.search_array = []     # 每项: "<rid> 《<歌名>》 <artist>"
@@ -313,6 +314,8 @@ class MainWindow:
         self._pb_pos = 0.0
         self._pb_last_set = 0.0
         self._pb_syncing = False   # 进度条程序化同步守卫 (防止 set() 触发 seek)
+        self._pb_pending_load = False   # 已恢复上次曲目但尚未开始播放 (默认暂停)
+        self._pb_resume_pos = 0.0       # 恢复会话时待跳转的进度 (秒)
         self._pb_mode = 1          # 0顺序 1列表循环 2单曲循环 3随机
         self._pb_was_playing = False
         self._pb_vol_val = 50
@@ -323,7 +326,7 @@ class MainWindow:
         self._cover_cache = {}      # 封面 URL → 已缓存 PhotoImage
         self._dl_br = "320kmp3"     # 下载/在线播放音质 (320kmp3/192kmp3/128kmp3)
         self._queue = []            # 播放队列: [{"title","type","row"|"path"}]
-        self._queue_dlg = None
+        self._queue_popup = None
         self._dl_state = {}          # path → {"row","status","mb"}
         self._dl_failed = {}         # path → {"rid","display"} 用于重试
         self._dl_last_mb = {}        # path → 上次已显示的 MB (节流)
@@ -363,10 +366,25 @@ class MainWindow:
         self._build_main()
         self._build_top_right()
         self._build_playbar()
+        self._build_ui_popups()
         self._bind_drag_all()
         self.show_home()
         # 启动优化: 推荐卡片较重, 等窗口首帧显示后再绘制
         self.root.after(120, self.recommend_grid.draw_deferred)
+
+    def _build_ui_popups(self):
+        """延后创建悬浮浮层 (队列), 避免拖慢启动; 悬浮时会按需创建。"""
+        self.root.after(400, self._ensure_queue_popup)
+
+    def _queue_hover_in(self, _e=None):
+        self._ensure_queue_popup().show()
+
+    def _queue_hover_out(self, _e=None):
+        if self._queue_popup is not None:
+            try:
+                self._queue_popup.schedule_hide()
+            except Exception:  # noqa: BLE001
+                pass
 
     def _bind_drag_all(self):
         """让无边框窗口在更大区域可拖拽 (面板空白/播放条/表头等)。"""
@@ -400,19 +418,77 @@ class MainWindow:
         self._nav["local"] = self.b3
         self._bind_drag(menu)
 
+    LOGO_W = 152          # 左上角字标显示宽度
+
     def _draw_logo(self):
-        """Logo: 绿圆音符 + 应用名 (微软雅黑)。"""
-        self.logo_box = tk.Canvas(self.menu, width=200, height=96,
-                                  bg="#FFFFFF", highlightthickness=0)
-        self.logo_box.place(x=0, y=0, width=200, height=96)
-        c = self.logo_box
-        c.create_oval(24, 26, 24 + 44, 26 + 44, fill=widgets.ACCENT_HEX, outline="")
-        c.create_text(46, 48, text="♪", fill="#FFFFFF",
-                      font=symbol_font(24))
-        c.create_text(78, 36, text="音乐下载器", fill="#1F2430",
-                      font=ui_font(15, "bold"), anchor="w")
-        c.create_text(78, 62, text="Music Player", fill="#9AA3B0",
-                      font=ui_font(10), anchor="w")
+        """左上角 Logo: Music. 字标 (asset 为白色+alpha 掩膜, 按当前主题色着色)。
+
+        换肤时 `_apply_accent()` 会再次调用本方法 → 字母颜色跟随主题色。
+        """
+        if not hasattr(self, "logo_box"):
+            self.logo_box = tk.Canvas(self.menu, width=200, height=96,
+                                      bg="#FFFFFF", highlightthickness=0)
+            self.logo_box.place(x=0, y=0, width=200, height=96)
+        self.logo_box.delete("all")
+        self._logo_photo = self._logo_photo_for(widgets.ACCENT_HEX)
+        if self._logo_photo is not None:
+            self.logo_box.create_image(24, 50, image=self._logo_photo,
+                                       anchor="w")
+
+    def _logo_alpha(self):
+        """字标 alpha 掩膜 (按显示宽度缩放并缓存)。"""
+        cache = getattr(self, "_logo_alpha_cache", None)
+        if cache is not None:
+            return cache
+        path = os.path.join(ASSETS_DIR, "logo_wordmark.png")
+        if not os.path.isfile(path):
+            return None
+        try:
+            base = Image.open(path).convert("RGBA")
+            h = max(1, round(base.height * self.LOGO_W / base.width))
+            a = base.getchannel("A").resize((self.LOGO_W, h), Image.LANCZOS)
+            self._logo_alpha_cache = a
+            return a
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _logo_photo_for(self, color):
+        """把白色字标掩膜着色为指定颜色 (供换肤即时生效)。"""
+        alpha = self._logo_alpha()
+        if alpha is None:
+            return None
+        try:
+            from PIL import ImageColor
+            rgb = ImageColor.getrgb(color)
+        except Exception:  # noqa: BLE001
+            rgb = (29, 185, 84)
+        img = Image.new("RGBA", alpha.size, tuple(rgb) + (0,))
+        img.putalpha(alpha)
+        return to_photo(img)
+
+    def _set_window_icon(self):
+        """任务栏/最小化图标: assets/app_icon.png (提供多尺寸更清晰)。"""
+        path = os.path.join(ASSETS_DIR, "app_icon.png")
+        if not os.path.isfile(path):
+            return
+        try:
+            base = Image.open(path).convert("RGBA")
+            photos = []
+            for size in (16, 24, 32, 48, 64, 128, 256):
+                try:
+                    photos.append(to_photo(base.resize((size, size),
+                                                       Image.LANCZOS)))
+                except Exception:  # noqa: BLE001
+                    pass
+            if photos:
+                self._icon_photos = photos   # 需持有引用
+                self.root.iconphoto(True, *photos)
+        except Exception:  # noqa: BLE001
+            try:
+                self._icon_photo = tk.PhotoImage(file=path)
+                self.root.iconphoto(True, self._icon_photo)
+            except Exception:  # noqa: BLE001
+                pass
 
     # ------------------------------- 主区域 (X=200, 800px)
     def _build_main(self):
@@ -707,7 +783,7 @@ class MainWindow:
         self._pb_vol = ttk.Scale(bar, from_=0, to=100, value=50,
                                  style="TScale", command=self._pb_on_vol,
                                  cursor="hand2")
-        self._pb_vol.place(x=794, y=34, width=56)
+        self._pb_vol.place(x=794, y=24, width=56)
         # 悬停音量滑杆时滚轮调节音量
         for wgt in (self._pb_vol, self._pb_btn_mute):
             wgt.bind("<MouseWheel>", self._on_vol_wheel)
@@ -716,15 +792,17 @@ class MainWindow:
         self._pb_btn_queue = ttk.Button(bar, text="队列", command=self.open_queue,
                                         cursor="hand2", style="Ghost.TButton",
                                         takefocus=False)
-        self._pb_btn_queue.place(x=846, y=18, width=44, height=28)
+        self._pb_btn_queue.place(x=846, y=18, width=46, height=28)
+        self._pb_btn_queue.bind("<Enter>", self._queue_hover_in, add="+")
+        self._pb_btn_queue.bind("<Leave>", self._queue_hover_out, add="+")
         self._pb_btn_lyr = ttk.Button(bar, text="词", command=self._toggle_lyrics,
                                       cursor="hand2", style="Ghost.TButton",
                                       takefocus=False)
-        self._pb_btn_lyr.place(x=894, y=18, width=38, height=28)
+        self._pb_btn_lyr.place(x=896, y=18, width=38, height=28)
         self._pb_btn_ext = ttk.Button(bar, text="外部", command=self._open_external,
                                       cursor="hand2", style="Ghost.TButton",
                                       takefocus=False)
-        self._pb_btn_ext.place(x=936, y=18, width=52, height=28)
+        self._pb_btn_ext.place(x=938, y=18, width=52, height=28)
 
     # ============================================================== 层级切换
     def show_home(self):
@@ -1149,22 +1227,26 @@ class MainWindow:
             row = self.search_array[idx]
             self._queue.append({"title": KuwoAPI.song_name(row),
                                 "type": "online", "row": row})
-        if self._queue_dlg is not None:
-            try:
-                if self._queue_dlg.winfo_exists():
-                    self._queue_dlg.refresh()
-            except Exception:  # noqa: BLE001
-                pass
+        self._refresh_queue_popup()
         messagebox.showinfo("播放队列", "已加入 %d 首歌曲" % len(idxs))
 
+    def _refresh_queue_popup(self):
+        if self._queue_popup is not None:
+            try:
+                if self._queue_popup.winfo_exists():
+                    self._queue_popup.refresh()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _ensure_queue_popup(self):
+        if self._queue_popup is None or not self._queue_popup.winfo_exists():
+            self._queue_popup = dialogs.QueuePopup(
+                self.root, self, self._pb_btn_queue,
+                self._queue_play, self._queue_clear)
+        return self._queue_popup
+
     def open_queue(self):
-        if self._queue_dlg is None or not self._queue_dlg.winfo_exists():
-            self._queue_dlg = dialogs.QueueDialog(
-                self.root, self, self._queue_play, self._queue_clear)
-        else:
-            self._queue_dlg.refresh()
-            self._queue_dlg.deiconify()
-            self._queue_dlg.lift()
+        self._ensure_queue_popup().show()
 
     def _queue_play(self, index):
         if 0 <= index < len(self._queue):
@@ -1179,11 +1261,7 @@ class MainWindow:
 
     def _queue_clear(self):
         self._queue = []
-        if self._queue_dlg is not None:
-            try:
-                self._queue_dlg.refresh()
-            except Exception:  # noqa: BLE001
-                pass
+        self._refresh_queue_popup()
 
     def _online_ready(self, path):
         """下载线程回调 (非主线程): 转投主线程队列。"""
@@ -1233,12 +1311,7 @@ class MainWindow:
                 messagebox.showinfo("播放队列", "该歌曲已在队列中")
                 return
         self._queue.append({"type": "file", "path": path, "title": title})
-        if self._queue_dlg is not None:
-            try:
-                if self._queue_dlg.winfo_exists():
-                    self._queue_dlg.refresh()
-            except Exception:  # noqa: BLE001
-                pass
+        self._refresh_queue_popup()
         messagebox.showinfo("播放队列", "已加入播放队列")
 
     def _dl_show_dir(self, index):
@@ -1456,6 +1529,8 @@ class MainWindow:
             return
         self._pb_path = path
         self._pb_ext = False
+        self._pb_pending_load = False
+        self._pb_resume_pos = 0.0
         self._pb_dur = 1.0
         self._pb_track.configure(text=os.path.basename(path))
         self._update_cover()   # 封面异步加载
@@ -1464,8 +1539,23 @@ class MainWindow:
         except Exception:  # noqa: BLE001
             pass
         self._pb_time.configure(text="0:00 / 0:00")
+        self._load_lyrics_for(path)
 
-        # ---- 加载歌词 (优先 .lrc 侧车文件, 再 fallback 嵌入 USLT) ----
+        if not self._engine.st.get("ok"):
+            messagebox.showerror(
+                "错误",
+                "内部播放器不可用（%s）\n请点击右侧“外部”按钮改用系统播放器。"
+                % self._engine.st.get("err"))
+            return
+        try:
+            self._engine.play(path)
+            self._pb_btn_play.set_glyph("\u23F8")
+        except Exception as exc:  # noqa: BLE001
+            print("播放错误:", exc)
+            messagebox.showerror("错误", "播放失败（%s）" % exc)
+
+    def _load_lyrics_for(self, path):
+        """加载歌词 (优先 .lrc 侧车文件, 再 fallback 嵌入 USLT)。"""
         try:
             lrc_path = os.path.splitext(path)[0] + ".lrc"
             if os.path.isfile(lrc_path):
@@ -1485,19 +1575,6 @@ class MainWindow:
                     self.lyrics_panel.clear("暂无歌词")
         except Exception:  # noqa: BLE001
             self.lyrics_panel.clear("歌词加载失败")
-
-        if not self._engine.st.get("ok"):
-            messagebox.showerror(
-                "错误",
-                "内部播放器不可用（%s）\n请点击右侧“外部”按钮改用系统播放器。"
-                % self._engine.st.get("err"))
-            return
-        try:
-            self._engine.play(path)
-            self._pb_btn_play.set_glyph("\u23F8")
-        except Exception as exc:  # noqa: BLE001
-            print("播放错误:", exc)
-            messagebox.showerror("错误", "播放失败（%s）" % exc)
 
     # ============================================================== 歌词获取
     @staticmethod
@@ -1620,6 +1697,17 @@ class MainWindow:
         if not self._engine.st.get("ok"):
             messagebox.showinfo("提示", "内部播放器不可用，请用“外部”按钮。")
             return
+        if self._pb_pending_load:
+            # 上次关闭后恢复的曲目: 载入并从记忆进度继续 (此刻才真正开始播放)
+            pos = self._pb_resume_pos
+            self._play_path(self._pb_path)
+            if pos > 0:
+                try:
+                    self._engine.seek(pos)   # 引擎命令队列有序, 播放后立即跳转
+                    self._pb_pos = pos
+                except Exception:  # noqa: BLE001
+                    pass
+            return
         try:
             if self._engine.st["state"] == 3:
                 self._engine.pause()
@@ -1677,6 +1765,16 @@ class MainWindow:
         # 否则 _poll_player 每 400ms 刷新进度都会重新 seek → 播放卡顿
         if self._pb_syncing:
             return
+        if self._pb_pending_load:
+            # 尚未开始播放: 只记住目标进度, 不驱动引擎 (避免拖动即开始播放)
+            self._pb_resume_pos = max(0.0, float(v))
+            self._pb_pos = self._pb_resume_pos
+            try:
+                self._pb_time.configure(
+                    text="%s / %s" % (self._fmt(v), self._fmt(self._pb_dur)))
+            except Exception:  # noqa: BLE001
+                pass
+            return
         if self._engine.st.get("ok") and not self._pb_ext and self._pb_dur > 0:
             try:
                 self._engine.seek(v)
@@ -1713,7 +1811,7 @@ class MainWindow:
 
     def _poll_player(self):
         """每 400ms 从引擎状态 dict 刷新进度/时长 (不跨线程访问 winmm)。"""
-        if self._pb_path and not self._pb_ext:
+        if self._pb_path and not self._pb_ext and not self._pb_pending_load:
             st = self._engine.st
             if st.get("ok"):
                 dur = float(st.get("dur") or 0.0)
@@ -1770,7 +1868,10 @@ class MainWindow:
 
     # ============================================================== 设置持久化
     def _load_settings(self):
-        """读取 settings.json, 恢复播放模式/音量/静音 (不自动播放)。"""
+        """读取 settings.json, 恢复模式/音量/静音 + 上次会话 (曲目/进度/队列)。
+
+        恢复后处于**暂停**状态 (不自动播放): 曲名/封面/进度条就位, 点播放才出声。
+        """
         try:
             with open(self._settings_path, encoding="utf-8") as f:
                 import json
@@ -1794,18 +1895,103 @@ class MainWindow:
                 self._set_br_ui()
         except Exception:  # noqa: BLE001
             pass
+        try:
+            self._restore_session(s)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _restore_session(self, s):
+        """恢复播放队列 + 上次播放曲目与进度 (暂停态, 不自动播放)。"""
+        import tempfile
+        # ---- 播放队列 ----
+        q = s.get("queue")
+        if isinstance(q, list):
+            self._queue = [it for it in q if isinstance(it, dict)]
+            self._refresh_queue_popup()
+        # ---- 播放列表上下文 (上一首/下一首仍可用) ----
+        pl = s.get("playlist")
+        if isinstance(pl, list):
+            self._pb_playlist = [p for p in pl if isinstance(p, str)]
+        try:
+            self._pb_idx = int(s.get("idx", -1))
+        except Exception:  # noqa: BLE001
+            self._pb_idx = -1
+        # ---- 上次播放曲目 + 进度 ----
+        track = s.get("track")
+        if not track or not os.path.isfile(track):
+            return
+        # 不恢复在线临时文件 (可能已被系统清理)
+        online_dir = os.path.join(tempfile.gettempdir(), "musicplayer_online")
+        try:
+            if os.path.abspath(track).startswith(os.path.abspath(online_dir)):
+                return
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            pos = max(0.0, float(s.get("pos") or 0.0))
+        except Exception:  # noqa: BLE001
+            pos = 0.0
+
+        self._pb_path = track
+        self._pb_ext = False
+        self._pb_pending_load = True
+        self._pb_resume_pos = pos
+        self._pb_track.configure(text=os.path.basename(track))
+        self._update_cover()
+        self._load_lyrics_for(track)
+        dur = 0.0
+        try:
+            from .lyrics import mp3_duration
+            dur = float(mp3_duration(track)) or 0.0
+        except Exception:  # noqa: BLE001
+            dur = 0.0
+        self._pb_dur = dur if dur > 0 else 1.0
+        if dur > 0:
+            try:
+                self._pb_progress.configure(to=int(dur) + 1, state="normal")
+                self._pb_syncing = True
+                self._pb_progress.set(min(pos, dur))
+                self._pb_last_set = pos
+            except Exception:  # noqa: BLE001
+                pass
+            finally:
+                self._pb_syncing = False
+            self._pb_time.configure(
+                text="%s / %s" % (self._fmt(pos), self._fmt(dur)))
+        else:
+            self._pb_time.configure(text="%s / 0:00" % self._fmt(pos))
+        self._pb_pos = pos
+        self._pb_btn_play.set_glyph("\u25B6")   # 暂停态: 显示播放图标
 
     def _save_settings(self):
-        """保存播放模式/音量/静音/音质到 settings.json。"""
+        """保存播放模式/音量/静音/音质 + 会话 (曲目/进度/队列/播放列表)。"""
         import json
+        import tempfile
         try:
             d = os.path.dirname(self._settings_path)
             if d:
                 os.makedirs(d, exist_ok=True)
+            # 在线临时文件不持久化
+            track = self._pb_path if (self._pb_path and not self._pb_ext) \
+                else None
+            if track:
+                online_dir = os.path.join(tempfile.gettempdir(),
+                                          "musicplayer_online")
+                try:
+                    if os.path.abspath(track).startswith(
+                            os.path.abspath(online_dir)):
+                        track = None
+                except Exception:  # noqa: BLE001
+                    pass
             data = {"mode": int(self._pb_mode),
                     "volume": int(self._pb_vol_val),
                     "muted": bool(self._pb_muted),
-                    "br": self._dl_br}
+                    "br": self._dl_br,
+                    "track": track,
+                    "pos": float(self._pb_pos) if track else 0.0,
+                    "playlist": list(self._pb_playlist),
+                    "idx": int(self._pb_idx),
+                    "queue": list(self._queue)}
             with open(self._settings_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception:  # noqa: BLE001
@@ -1976,8 +2162,8 @@ class MainWindow:
     def _to_tray(self):
         if not self.tray_active:
             self.tray_active = True
-            self.tray_icon = dialogs.run_tray(os.path.join(PICTRUE, "logo.jpg"),
-                                              self.root)
+            self.tray_icon = dialogs.run_tray(
+                os.path.join(ASSETS_DIR, "app_icon.png"), self.root)
             if self.tray_icon is None:
                 self.tray_active = False
                 self._taskbar_minimize()

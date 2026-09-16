@@ -2,7 +2,7 @@
 """一键打包 Windows 可安装程序。
 
 步骤:
-  1. 由 assets/Pictrue/logo.jpg 生成 packaging/app.ico (多尺寸)
+  1. 由 assets/app_icon.png 生成 packaging/app.ico (多尺寸)
   2. PyInstaller 打包应用本体 -> dist/MusicPlayer/
   3. PyInstaller 打包安装程序 (内嵌 payload) -> dist/MusicPlayerSetup.exe
 
@@ -16,17 +16,23 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PKG = os.path.join(ROOT, "packaging")
 ICON = os.path.join(PKG, "app.ico")
-LOGO = os.path.join(ROOT, "src", "musicplayer", "assets", "Pictrue",
-                    "logo.jpg")
+ASSETS = os.path.join(ROOT, "src", "musicplayer", "assets")
+# 优先用新的应用图标, 回落旧 logo
+LOGO_CANDIDATES = [os.path.join(ASSETS, "app_icon.png"),
+                   os.path.join(ASSETS, "Pictrue", "logo.jpg")]
 
 
 def gen_icon():
-    if os.path.exists(ICON):
-        print("[1/3] 图标已存在:", ICON)
+    src = next((p for p in LOGO_CANDIDATES if os.path.isfile(p)), None)
+    if src is None:
+        print("[1/3] 未找到图标源文件, 跳过")
+        return
+    if os.path.exists(ICON) and os.path.getmtime(ICON) >= os.path.getmtime(src):
+        print("[1/3] 图标已是最新:", ICON)
         return
     try:
         from PIL import Image
-        img = Image.open(LOGO).convert("RGBA")
+        img = Image.open(src).convert("RGBA")
         # 居中裁成正方形后缩放到多尺寸
         side = min(img.size)
         left = (img.width - side) // 2
@@ -35,7 +41,7 @@ def gen_icon():
         sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64),
                  (128, 128), (256, 256)]
         img.save(ICON, sizes=sizes)
-        print("[1/3] 生成图标:", ICON)
+        print("[1/3] 生成图标:", ICON, "<-", os.path.basename(src))
     except Exception as exc:  # noqa: BLE001
         print("[1/3] 生成图标失败 (将不使用图标):", exc)
 

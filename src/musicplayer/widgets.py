@@ -402,7 +402,7 @@ def apply_tk_theme(root):
         # ---- 普通按钮: 白底细边 ----
         s.configure("TButton", background="#FFFFFF", foreground="#1F2430",
                     bordercolor="#E4E7EC", focusthickness=0,
-                    focuscolor="#FFFFFF", relief="flat", padding=(14, 6))
+                    focuscolor="#FFFFFF", relief="flat", padding=(14, 4))
         s.map("TButton",
               background=[("pressed", "#E9EBEF"), ("active", "#F3F4F6")],
               bordercolor=[("active", "#D4D8DE")])
@@ -410,7 +410,7 @@ def apply_tk_theme(root):
         s.configure("Accent.TButton", background=ACCENT_HEX,
                     foreground="#FFFFFF", bordercolor=ACCENT_HEX,
                     focusthickness=0, focuscolor=ACCENT_HEX, relief="flat",
-                    padding=(14, 6))
+                    padding=(14, 4))
         s.map("Accent.TButton",
               background=[("pressed", "#14803A"), ("active", "#17A34A")],
               bordercolor=[("active", "#17A34A")])
@@ -418,7 +418,7 @@ def apply_tk_theme(root):
         s.configure("Ghost.TButton", background="#FFFFFF",
                     foreground="#5A6472", bordercolor="#E4E7EC",
                     focusthickness=0, focuscolor="#FFFFFF", relief="flat",
-                    padding=(6, 4))
+                    padding=(6, 2))
         s.map("Ghost.TButton",
               background=[("pressed", "#E9EBEF"), ("active", "#F3F4F6")],
               bordercolor=[("active", "#D4D8DE")])
@@ -926,9 +926,11 @@ class ProgressBar(tk.Canvas):
 
     def __init__(self, master, width=300, height=18, command=None,
                  bg="#FFFFFF"):
-        self._w, self._h = width, height
         super().__init__(master, width=width, height=height, bg=bg,
                          highlightthickness=0, cursor="hand2")
+        # 注意: tk.Canvas 内部会占用 self._w / self._h (存放控件路径名),
+        # 因此基准尺寸另存 _cw / _ch, 未完成布局时用它兜底。
+        self._cw, self._ch = width, height
         self._value = 0.0
         self._maxv = 100.0
         self._command = command
@@ -936,6 +938,7 @@ class ProgressBar(tk.Canvas):
         self.bind("<Button-1>", self._press)
         self.bind("<B1-Motion>", self._move)
         self.bind("<ButtonRelease-1>", self._release)
+        self.bind("<Configure>", lambda e: self._draw())
         self._draw()
 
     def set(self, value):
@@ -956,7 +959,9 @@ class ProgressBar(tk.Canvas):
         raise tk.TclError("unknown option %r" % k)
 
     def _frac(self, e):
-        w = self.winfo_width() or self._w
+        w = self.winfo_width()
+        if w <= 1:
+            w = self._cw
         if w <= 1:
             return 0.0
         return max(0.0, min(1.0, e.x / w))
@@ -980,8 +985,14 @@ class ProgressBar(tk.Canvas):
 
     def _draw(self):
         self.delete("all")
-        w = self.winfo_width() or self._w
-        h = self.winfo_height() or self._h
+        # 控件尚未完成布局时 winfo_width() 返回 1 (非 0), 不能靠 `or` 兜底,
+        # 否则恢复会话时按 1px 宽度绘制 → 进度条填充几乎为 0
+        w = self.winfo_width()
+        if w <= 1:
+            w = self._cw
+        h = self.winfo_height()
+        if h <= 1:
+            h = self._ch
         y = h // 2
         r = 3
         frac = (self._value / self._maxv) if self._maxv else 0.0
@@ -1017,7 +1028,7 @@ class LyricsPanel(tk.Frame):
     """
 
     _BG      = "#F7F8FA"
-    _ACCENT  = "#1DB954"
+    _ACCENT  = "#1DB954"      # 以下三项由 _sync_theme() 跟随强调色
     _GLOW    = "#DDF6E6"
     _CUR_TXT = "#0F9D4A"
     _DIM     = "#9AA3B0"
@@ -1028,9 +1039,24 @@ class LyricsPanel(tk.Frame):
     _FONT_CUR = (FONT_FAMILY, 20, "bold")
     _FONT_FAR = (FONT_FAMILY, 13)
 
+    def _sync_theme(self):
+        """把当前行的高亮色同步为当前强调色 (换肤后调用)。"""
+        self._ACCENT = ACCENT_HEX
+        self._GLOW = ACCENT_SOFT_HEX
+        self._CUR_TXT = ACCENT_TXT_HEX
+
+    def refresh(self):
+        """换肤回调: 重新着色并重绘歌词。"""
+        self._sync_theme()
+        if self._lines:
+            self._draw_frame()
+        else:
+            self._draw_blank()
+
     def __init__(self, master, width=800, height=600, **kw):
         super().__init__(master, bg=self._BG, **kw)
         self._W, self._H = width, height
+        self._sync_theme()
 
         # ---- 顶部标题栏 ----
         self._title_var = tk.StringVar(value="")
@@ -1068,6 +1094,7 @@ class LyricsPanel(tk.Frame):
         self._cur_idx = -1
         self._blank_msg = ""
         self._active = False    # 面板可见时才运行动画, 避免后台 30fps 空转
+        register(self)          # 换肤时随 refresh_all_theme() 重新着色
 
     # ---------------------------------------------------------- 对外接口
     def set_fetch_callback(self, cb):

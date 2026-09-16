@@ -356,56 +356,232 @@ class LocalScanDialog(tk.Toplevel):
         self._refocus_master()
 
 
-class QueueDialog(tk.Toplevel):
-    """播放队列浮层: 显示队列、双击跳播、清空、关闭。"""
+def _round_rect(canvas, x0, y0, x1, y1, r, **kw):
+    """在 Canvas 上画圆角矩形 (平滑多边形近似)。"""
+    pts = [x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r, x1, y1 - r, x1, y1,
+           x1 - r, y1, x0 + r, y1, x0, y1, x0, y1 - r, x0, y0 + r, x0, y0]
+    return canvas.create_polygon(pts, smooth=True, **kw)
 
-    def __init__(self, master, app, on_play, on_clear):
+
+class QueuePopup(tk.Toplevel):
+    """播放队列浮层: 悬浮在「队列」按钮上方展开, 移开自动收起。
+
+    - 圆角白卡 + 浅投影, 当前播放行绿色高亮, hover 行浅灰
+    - 单击行跳播; 头部「清空」; 多项时可滚轮/滚动条
+    """
+
+    CARD_W = 300
+    PAD = 12
+    HEADER_H = 30
+    HINT_H = 20
+    ROW_H = 32
+    MAX_ROWS = 8
+    RADIUS = 12
+    SHADOW = 6
+    HIDE_MS = 220
+
+    def __init__(self, master, app, anchor, on_play, on_clear):
         super().__init__(master)
-        self.title("播放队列")
-        self.geometry("360x440")
-        self.resizable(False, False)
-        self.configure(bg="#FFFFFF")
+        self.overrideredirect(True)
+        self._magic = "#FE00FE"
+        self.configure(bg=self._magic)
+        try:
+            self.wm_attributes("-transparentcolor", self._magic)
+        except tk.TclError:
+            pass
+        try:
+            self.wm_attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        self.withdraw()
+
         self._app = app
+        self._anchor = anchor
         self._on_play = on_play
         self._on_clear = on_clear
+        self._hide_job = None
+        self._hover = -1
+        self._rows = 1
+        self._popup_w = self.CARD_W + self.SHADOW
+        self._popup_h = 160
 
-        tk.Label(self, text="播放队列", font=(FONT_FAMILY, 16, "bold"),
-                 bg="#FFFFFF", fg="#1F2430").place(x=18, y=14)
+        self._canvas = tk.Canvas(self, bg=self._magic, highlightthickness=0,
+                                 width=self._popup_w, height=self._popup_h)
+        self._canvas.place(x=0, y=0)
 
-        self._list = tk.Listbox(self, bg="#FFFFFF", fg="#1F2430",
-                                font=(FONT_FAMILY, 11), bd=0,
-                                highlightthickness=0, selectbackground="#E7F8EE",
-                                selectforeground="#0F9D4A", activestyle="none")
-        self._list.place(x=16, y=52, width=328, height=330)
-        self._list.bind("<Double-Button-1>", self._pick)
-        sb = ttk.Scrollbar(self, orient="vertical",
-                           command=self._list.yview)
-        self._list.configure(yscrollcommand=sb.set)
-        sb.place(x=344, y=52, width=10, height=330)
+        self._title = tk.Label(self, text="播放队列", bg="#FFFFFF",
+                               fg="#1F2430", font=(FONT_FAMILY, 12, "bold"))
+        self._count = tk.Label(self, text="", bg="#FFFFFF", fg="#9AA3B0",
+                               font=(FONT_FAMILY, 9))
+        self._clear = tk.Label(self, text="清空", bg="#FFFFFF",
+                               fg=ACCENT_HEX, font=(FONT_FAMILY, 10),
+                               cursor="hand2")
+        self._clear.bind("<Button-1>", lambda e: self._clear_clicked())
+        self._clear.bind("<Enter>", lambda e: self._clear.configure(
+            fg=ACCENT_DK_HEX))
+        self._clear.bind("<Leave>", lambda e: self._clear.configure(
+            fg=ACCENT_HEX))
 
-        ttk.Button(self, text="清空", command=self._clear,
-                   style="TButton").place(x=90, y=396, width=90, height=32)
-        ttk.Button(self, text="关闭", command=self.destroy,
-                   style="TButton").place(x=192, y=396, width=90, height=32)
+        self._list = tk.Listbox(self, bg="#FFFFFF", fg="#333A44", bd=0,
+                                highlightthickness=0, activestyle="none",
+                                font=(FONT_FAMILY, 10), selectborderwidth=0,
+                                selectbackground="#F3F4F6")
+        self._sb = ttk.Scrollbar(self, orient="vertical",
+                                 command=self._list.yview)
+        self._list.configure(yscrollcommand=self._sb.set)
+        self._hint = tk.Label(self, text="单击播放 · 移开自动收起", bg="#FFFFFF",
+                              fg="#B4BAC4", font=(FONT_FAMILY, 9))
 
+        self._list.bind("<Button-1>", self._pick)
+        self._list.bind("<Motion>", self._on_motion)
+        self._list.bind("<Leave>", lambda e: self._set_hover(-1), add="+")
+        self._list.bind("<MouseWheel>", self._on_wheel)
+
+        for wd in (self, self._canvas, self._list, self._title, self._count,
+                   self._clear, self._hint, self._sb):
+            wd.bind("<Enter>", lambda e: self.cancel_hide(), add="+")
+            wd.bind("<Leave>", lambda e: self.schedule_hide(), add="+")
+
+    # ------------------------------------------------------------ 显隐控制
+    def show(self):
+        self.cancel_hide()
         self.refresh()
-        _center_over(self, 360, 440, self.master)
+        self.deiconify()
+        self.update_idletasks()
+        self._reposition()
+        self.lift()
 
+    def schedule_hide(self):
+        self.cancel_hide()
+        self._hide_job = self.after(self.HIDE_MS, self.hide)
+
+    def cancel_hide(self):
+        if self._hide_job is not None:
+            try:
+                self.after_cancel(self._hide_job)
+            except Exception:  # noqa: BLE001
+                pass
+            self._hide_job = None
+
+    def hide(self):
+        self._hide_job = None
+        try:
+            self.withdraw()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _reposition(self):
+        a = self._anchor
+        ax, ay = a.winfo_rootx(), a.winfo_rooty()
+        aw, ah = a.winfo_width(), a.winfo_height()
+        pw, ph = self._popup_w, self._popup_h
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        x = ax + aw - pw + self.SHADOW
+        y = ay - ph + 2
+        x = max(4, min(x, sw - pw - 4))
+        if y < 4:
+            y = ay + ah + 2
+        self.geometry("+%d+%d" % (x, y))
+
+    # ------------------------------------------------------------ 内容刷新
     def refresh(self):
+        q = self._app._queue
+        cur = self._current_index()
         self._list.delete(0, "end")
-        for i, item in enumerate(self._app._queue):
-            self._list.insert("end", "%d. %s" % (i + 1,
-                                                 item.get("title", "?")))
-        if not self._app._queue:
-            self._list.insert("end", "（队列为空）")
+        for i, it in enumerate(q):
+            mark = "\u25B6 " if i == cur else "   "
+            self._list.insert("end", "%s%d   %s" % (mark, i + 1,
+                                                    it.get("title", "?")))
+        self._count.configure(text=("共 %d 首" % len(q)) if q else "")
+        self._rows = min(max(len(q), 1), self.MAX_ROWS)
+        self._hover = -1
+        self._layout()
+        if not q:
+            self._list.insert("end", "   队列为空, 试试「加入队列」")
+        self._apply_colors(cur)
 
-    def _pick(self, _e):
-        sel = self._list.curselection()
-        if sel and sel[0] < len(self._app._queue):
-            self._on_play(sel[0])
+    def _current_index(self):
+        path = getattr(self._app, "_pb_path", None)
+        if not path:
+            return -1
+        for i, it in enumerate(self._app._queue):
+            if it.get("type") == "file" and it.get("path") == path:
+                return i
+        return -1
 
-    def _clear(self):
+    def _layout(self):
+        W = self.CARD_W
+        list_h = self._rows * self.ROW_H
+        need_sb = len(self._app._queue) > self.MAX_ROWS
+        sb_w = 12 if need_sb else 0
+        H = self.PAD + self.HEADER_H + 4 + list_h + 4 + self.HINT_H + self.PAD
+        self._popup_w = W + self.SHADOW
+        self._popup_h = H + self.SHADOW
+        self._canvas.configure(width=self._popup_w, height=self._popup_h)
+        self._draw_card(W, H)
+        self._title.place(x=self.PAD, y=self.PAD - 1)
+        self._count.place(x=self.PAD + 78, y=self.PAD + 2)
+        self._clear.place(x=W - self.PAD - 32, y=self.PAD + 1)
+        ly = self.PAD + self.HEADER_H + 4
+        self._list.place(x=self.PAD, y=ly,
+                         width=W - 2 * self.PAD - sb_w, height=list_h)
+        if need_sb:
+            self._sb.place(x=W - self.PAD - 12, y=ly, width=12, height=list_h)
+        else:
+            self._sb.place_forget()
+        self._hint.place(x=self.PAD, y=H - self.PAD - self.HINT_H)
+        self.geometry("%dx%d" % (self._popup_w, self._popup_h))
+
+    def _draw_card(self, W, H):
+        c = self._canvas
+        c.delete("all")
+        _round_rect(c, 4, 2, W + 3, H + 1, self.RADIUS,
+                    fill="#E9ECF1", outline="#E9ECF1")
+        _round_rect(c, 2, 1, W + 1, H, self.RADIUS,
+                    fill="#DFE3E9", outline="#DFE3E9")
+        _round_rect(c, 0, 0, W - 1, H - 1, self.RADIUS,
+                    fill="#FFFFFF", outline="#E1E4EA")
+
+    # ------------------------------------------------------------ 交互
+    def _apply_colors(self, cur=None):
+        if cur is None:
+            cur = self._current_index()
+        n = len(self._app._queue)
+        for i in range(n):
+            if i == cur:
+                bg, fg = ACCENT_SOFT_HEX, "#0F9D4A"
+            elif i == self._hover:
+                bg, fg = "#F3F4F6", "#1F2430"
+            else:
+                bg, fg = "#FFFFFF", "#333A44"
+            self._list.itemconfig(i, background=bg, foreground=fg,
+                                  selectbackground=bg, selectforeground=fg)
+
+    def _on_motion(self, e):
+        idx = self._list.nearest(e.y)
+        if idx >= len(self._app._queue):
+            idx = -1
+        if idx != self._hover:
+            self._hover = idx
+            self._apply_colors()
+
+    def _set_hover(self, idx):
+        if self._hover != idx:
+            self._hover = idx
+            self._apply_colors()
+
+    def _on_wheel(self, e):
+        self._list.yview_scroll(-1 if e.delta > 0 else 1, "units")
+
+    def _pick(self, e):
+        idx = self._list.nearest(e.y)
+        if 0 <= idx < len(self._app._queue):
+            self._on_play(idx)
+            self.after(80, self.refresh)
+
+    def _clear_clicked(self):
         self._on_clear()
+        self.refresh()
 
 
 def tray_available():

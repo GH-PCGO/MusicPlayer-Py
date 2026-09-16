@@ -89,16 +89,19 @@ MusicPlayer-Py/
         ├── __main__.py      # python -m musicplayer
         ├── app.py           # 主界面/全部事件 (原 main.py)
         ├── widgets.py       # 自定义组件 (面板/列表/推荐格/播放条/歌词面板)
-        ├── dialogs.py       # 主题色/存储位置/本地扫描/播放队列窗口 + 托盘
+        ├── dialogs.py       # 主题色/存储位置/本地扫描/播放队列悬浮层 + 托盘
         ├── kuwo.py          # 酷我搜索 / 直链 / 下载
         ├── lyrics.py        # 纯 Python ID3v2 读写 + 歌词抓取 + LRC 解析
         ├── engine.py        # 播放引擎 (pygame + Windows MCI 回退)
         ├── paths.py         # 资产/数据目录解析
         ├── util.py          # 通用工具 (split_artists 等)
-        └── assets/Pictrue/  # 图片资源
+        └── assets/
+            ├── app_icon.png       # 应用图标 (任务栏/最小化/托盘/exe)
+            ├── logo_wordmark.png  # 左上角 Music. 字标 (白+alpha 掩膜, 按主题色着色)
+            └── Pictrue/           # 其它图片资源
 ```
 
-数据目录（`paths.py`）：源码布局下 `music/`（下载）与 `settings.json` 位于**项目根**；已安装布局下位于 `~/MusicPlayer/`。资产固定随包（`assets/Pictrue`）。
+数据目录（`paths.py`）：源码布局下 `music/`（下载）与 `settings.json` 位于**项目根**；已安装布局下位于 `~/MusicPlayer/`。资产固定随包（`assets/`，其中 `Pictrue` 为旧界面素材）。
 
 ## 打包为 Windows 可安装程序
 
@@ -108,7 +111,7 @@ MusicPlayer-Py/
 python packaging/build.py
 ```
 
-- `[1/3]` 由 `assets/Pictrue/logo.jpg` 生成多尺寸 `packaging/app.ico`
+- `[1/3]` 由 `assets/app_icon.png` 生成多尺寸 `packaging/app.ico`（缺失时回落 `<Pictrue>/logo.jpg`）
 - `[2/3]` PyInstaller 打包应用本体 → `dist/MusicPlayer/`（onedir，`MusicPlayer.exe`）
 - `[3/3]` 打包安装程序 → `dist/MusicPlayerSetup.exe`（单文件，内嵌整个应用目录）
 
@@ -178,15 +181,59 @@ python packaging/build.py
   - 已用 12 项自动化测试验证（六列内容、歌手/时长/大小/状态非空、歌手筛选、关键词搜索、视图索引映射）。
 - **播放器进阶（对照成熟播放器）**：
   - **播放模式**：播放条 🔁 按钮在 顺序/列表循环/单曲循环/随机 间循环（与上一首/下一首/播放三键成组）；`_poll_player` 检测 `state 3→stopped` 触发 `_pb_auto_next`——单曲重播、列表循环回绕、随机随机索引、顺序播完即停；手动上一首/下一首始终 ±1；
-  - **状态持久化**：`settings.json` 存 `{mode,volume,muted}`，模式切换/音量/静音/退出时保存，启动恢复（**不自动播放**）；
+  - **会话持久化（记忆上次关闭）**：`settings.json` 存 `{mode,volume,muted,br}` + 会话 `{track,pos,playlist,idx,queue}`，在模式切换/音量/静音/退出时保存。启动时恢复**正在播放的曲目、播放进度、播放队列、播放列表与音量**，曲名/封面/进度条/时间立即就位但处于**暂停态**（显示 ▶，不自动出声），点播放即从记忆进度继续；在线临时文件不持久化，恢复态下拖动进度条只更新记忆位置而不触发播放；
   - **播放条封面（真实优先）**：`lyrics.read_cover()` 解析 ID3v2 **APIC** 帧；`kuwo.py` 搜索返回 4 元组（含 `web_albumpic_short`），`main.py` 建 `歌名→封面URL` 映射（URL 基址 `img1.kuwo.cn/star/albumcover/`）；封面解析顺序 内嵌APIC → 同目录 jpg → 在线封面URL → 主题色音符占位，后台线程异步加载+防切歌竞态；
-  - **搜索双击播放 + 播放队列**：搜索结果双击直接在线播放；控制栏「加入队列」勾选歌曲入队，播放条「队列」打开 `QueueDialog`（序号列表、双击跳播、清空）；在线项播放时自动下载到临时目录；
+  - **搜索双击播放 + 播放队列**：搜索结果双击直接在线播放；控制栏「加入队列」勾选歌曲入队，播放条「队列」按钮**悬浮即在按钮上方展开**圆角浮层（`QueuePopup`，鼠标移开自动收起；顶部显示总数 + 「清空」，当前播放行绿色高亮带 ▶，单击行跳播，多项时滚轮/滚动条）；在线项播放时自动下载到临时目录；
   - **快捷键 + 静音**：空格=播放/暂停、←→=±5s、↑↓=音量（搜索框输入时忽略）；播放条喇叭按钮记忆音量一键静音；
   - **下载进度 + 失败重试**：`kuwo.download` 增 `on_progress(bytes)`，下载管理第 4 列实时显示「下载中 x.xMB → ✓ 完成 / 失败·双击重试」，失败行双击自动用记录的信息重下。
 - **启动优化**：`to_photo` 改用 `PIL.ImageTk.PhotoImage`（比 base64 PNG 重建更快，缺失时自动回落）；`RecommendGrid` 首屏 20 张卡片改为窗口首帧后延迟绘制（`draw_deferred`），列表填充延后到 `_poll_ui`（250ms）。`MainWindow` 构造 ~1.03s → ~0.75s。
 - **项目结构重构为标准 src 布局**：源码移入 `src/musicplayer/`（`main.py`→`app.py`，图像资源移至 `assets/Pictrue/`），新增 `paths.py`（资产/数据目录解析，兼容源码与已安装布局）、`util.py`、`__init__.py`、`__main__.py`；根目录新增 `run.py` 与 `pyproject.toml`（含 `musicplayer` 控制台脚本）、`tests/test_core.py`（pytest 兼容纯逻辑测试，顺带修复 `parse_lrc` 同行多时间戳切片偏移 bug）；模块内导入改为相对导入。支持 `python run.py`、`pip install -e .` 后 `musicplayer` / `python -m musicplayer`。
 - **打包为 Windows 10 可安装程序**：新增 `packaging/`（`MusicPlayer.spec` 应用 onedir + `installer.spec` 安装器 onefile + `installer.py` 自研 Tk 安装器 + `build.py` 一键构建）。`build.py` 先用 PIL 由 logo 生成多尺寸 `app.ico`，再依次打包应用与安装程序；安装器内嵌整个应用目录，支持选择安装位置、桌面/开始菜单快捷方式、HKCU 卸载注册表项与 `uninstall.bat`，并支持 `--uninstall` 静默卸载。实测：应用 exe 正常启动、`MusicPlayerSetup.exe` 界面正常（路径框加宽至满行并定位末尾，完整显示默认安装路径）、安装/注册表/卸载项全链路通过；已安装布局下数据统一落到 `~/MusicPlayer/`（`_save_settings` 自动建目录），打包后引擎自动回退 WinMM MCI 无需 pygame。
+- **播放按钮文字被裁切修复**：`Ghost.TButton`/`TButton`/`Accent.TButton` 的请求高度（32/36px）大于代码分配的 `place` 高度（28/32px），导致按钮文字底部被裁。收窄样式内边距（`Ghost` `(6,4)`→`(6,2)`、`TButton`/`Accent.TButton` `(14,6)`→`(14,4)`）使请求高度降到 28/32px；播放条「队列/词/外部」改为 `y=18` 高 28（与其它 28px 按钮对齐）。已用像素余量检测（上下各 8px、左右 9–14px，无触边）验证主窗口、下载面板与四个对话框按钮全部完整。
+- **音量滑块与喇叭图标对齐**：`_pb_vol` 原 `y=34`（高 16 → 中心 42）比 28px 静音按钮的中心（32）低 10px；改为 `y=24`，实测两者中心均为 568.0、滑块轨道中心 567.5。
+- **播放队列改为悬浮浮层**：删除 `QueueDialog` 独立窗口，新增 `QueuePopup`（`dialogs.py`）——鼠标悬浮播放条「队列」按钮即在其上方展开圆角白卡（`overrideredirect` + `transparentcolor` 圆角 + 浅投影），移开 220ms 自动收起（移入浮层或回到按钮可取消隐藏，避免闪烁）。浮层含标题、总数、「清空」、行列表（当前播放行绿色高亮并带 ▶、hover 浅灰、单击跳播、滚轮/滚动条）与底部署名提示；高度按行数封顶（超 8 行滚动），空队列显示引导文案。浮层延后 400ms 创建以免拖慢启动，悬浮时按需创建。
+- **自动记忆上次关闭的会话**：`_save_settings()` 新增 `track/pos/playlist/idx/queue` 字段（`_pb_pos` 由 `_poll_player` 每 400ms 刷新，退出时落盘）。`_load_settings()` 调 `_restore_session()` 恢复曲目/进度/队列/播放列表，并以**暂停态**呈现（曲名、封面、`mp3_duration` 探读的时长与进度条位置、时间「m:ss / m:ss」、▶ 图标），不自动播放。新增 `_pb_pending_load`/`_pb_resume_pos`：此时 `_poll_player` 跳过引擎轮询（避免把记忆进度清零），拖动进度条只改记忆位置；点播放才 `_play_path()` 载入并 `engine.seek(记忆进度)` 续播（引擎命令队列有序，play→seek 依次生效）。歌词加载抽成 `_load_lyrics_for()` 供播放与恢复共用；在线临时目录（`%TEMP%/musicplayer_online`）的曲目不持久化。实测：播放 3.5s（pos=3.21）退出 → 重启恢复为暂停态（时间 0:03/3:42、进度条 3.21、音量 73、队列 2 条）→ 点播放从 3.21 续播。
+- **进度条按记忆时间渲染修复**：`ProgressBar._draw()` 原用 `winfo_width() or self._w` 兜底，但 `tk.Canvas` 会把 `self._w`/`self._h` 覆盖成控件路径名，且未布局时 `winfo_width()` 返回 **1**（非 0，`or` 不触发）→ 恢复会话时按 1px 宽度绘制，填充几乎为 0。现基准尺寸另存 `_cw`/`_ch`（避开 `_w`/`_h` 冲突），`winfo_width() <= 1` 时用基准值兜底，并绑定 `<Configure>` 在布局完成后重绘。实测恢复 pos=128s/3:42 → 填充 177.9px（310×0.574，与时间一致）；播放中 3.98s → 填充 5.5px，均与进度值吻合。
+
+- **左上角 Logo 换为 Music. 字标 + 应用图标**：移除原「绿圆音符 + 音乐下载器 / Music Player」文字 Logo；`_draw_logo()` 改为渲染 `assets/logo_wordmark.png`（152×35）。该字标由用户提供的 `assets/透明背景logo.jpeg` 提取：原图实为**棋盘格底 + 白色字**（PNG 无 alpha，字形与棋盘格白格同为纯白、无法用亮度阈值区分），故采用「1/4 缩放 + 局部最小值滤波 → 字内保持 255、棋盘格被压暗」再二值化取掩膜，形态学开/闭运算清理噪点，最后用**连通域分析**剔除图像边框/水印残留（只保留 M . u s i c 与 i 的点等 7 个块；先前按「最大块」或用矩形裁切会把右侧 `c` 切掉，已修正）。字标存为**白色 + alpha 掩膜**，运行时由 `_logo_alpha()` / `_logo_photo_for(color)` 按当前主题色着色，因此**换肤时字母颜色随强调色同步变化**（`_apply_accent()` 已调用 `_draw_logo()`；logo 画布只创建一次，避免重复叠加）。新增 `_set_window_icon()`：以 `assets/app_icon.png` 生成 16–256px 多尺寸 `root.iconphoto(True, ...)` 作为任务栏/最小化图标（已截图确认任务栏显示为应用图标），托盘图标同步改用 `app_icon.png`；`build.py` 的 `app.ico` 改由 `app_icon.png` 生成（回落旧 logo）。`MusicPlayer.spec` 打包资源时排除设计稿源文件（`透明背景logo.jpeg`，1.4MB），仅随包运行时资源。实测：绿 `#1DB954` / 蓝 `#3B82F6` / 紫 `#8B5CF6` 切换后字标像素色随主题变化，且 `c` 完整无裁切。
+
+- **歌词高亮色跟随主题色**：`LyricsPanel` 的当前行光晕/文字色原为类常量（写死绿），现改为实例色并在 `_sync_theme()` 中从 `widgets.ACCENT_SOFT_HEX`/`ACCENT_TXT_HEX` 同步；实现 `refresh()` 并 `register(self)` 进换肤列表，`_apply_accent()` 的 `refresh_all_theme()` 会即时重绘。非当前行仍用中性灰渐变（保证可读性）。实测绿/蓝/橙切换后当前行光晕与文字色随之改变。
 
 ## 提示
 
 仅供学习交流使用，音乐版权归原版权方所有。
+
+## 安卓版本（WebView + Chaquopy 混合）
+
+`android/` 目录是一个独立的 Android Gradle 工程：**Chaquopy** 把桌面版纯 Python 逻辑（`src/musicplayer` 的 `kuwo.py`/`lyrics.py`/`paths.py`/`util.py`）打进 APK 并运行一个本地 HTTP 服务（`android/app/src/main/python/server.py`，纯标准库 `http.server`），界面是 WebView 里加载的移动端网页（`android/app/src/main/assets/www/`，HTML/CSS/JS，`<audio>` 直接播放在线直链）。第一版覆盖：搜索 / 在线播放 / 歌词同步 / 播放队列 / 主题色 / 音质选择 / 会话记忆（暂停恢复，不自动播放）。
+
+界面参照主流音乐 App（QQ 音乐 / 网易云风格）：
+- **底部导航**（首页 / 搜索 / 队列）+ 首页推荐 Banner 与 3 列推荐卡；
+- **全屏播放器**：模糊封面背景、居中大封面、歌词区 + 进度 + 上/下一首 + 播放模式 + 音量 + 主题色；
+- **点击播放条封面 / 歌名区域**即打开全屏播放器（歌词页）；
+- **歌词支持上下滑动**：拖动预览歌词行，松手即跳到对应时间播放（单击某行也可跳转）。
+
+### 打包 APK（Windows 本机）
+
+需要 JDK 17 + Android SDK 34 + Gradle 8.7（参考 `AndroidToolchain` 目录），并为本机 Python 版本。首次构建：
+
+```bash
+cd android
+gradle :app:assembleDebug
+# 产物: android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+`app/build.gradle.kts` 里 `buildPython()` 指向本机 Python 3.11；ABI 覆盖 `arm64-v8a` + `armeabi-v7a`（Python 3.11 才支持 32 位）。装到手机：`adb install -r app-debug.apk`，或用文件管理器直接安装（需允许“安装未知来源应用”）。
+
+### 本地调试 Web 界面（不开安卓）
+
+```bash
+python android/app/src/main/python/server.py
+# 浏览器打开 http://127.0.0.1:8760/
+```
+
+### 与桌面版的差异
+
+- 界面为移动端网页（无 Tkinter），下载/本地音乐列表暂未实现（后续迭代）。
+- 播放用 `<audio>` 直接拉取酷我签名直链；进度/seek/音量/切歌由 JS 处理。
+- 会话（主题/音质/音量/模式/队列/进度）存在 WebView `localStorage`，启动恢复为暂停态。

@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<link rel="icon" href="data:,">
+<title>音乐下载器</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- ============ 页面: 首页 ============ -->
+<section id="homeView" class="page">
+  <div class="pageHead">
+    <div id="logo">Music.</div>
+    <div id="fakeSearch" onclick="app.goSearch()">
+      <span class="fakeIcon">&#9906;</span><span>搜索歌曲 / 歌手</span>
+    </div>
+  </div>
+  <div class="homeBody">
+    <div class="banner">
+      <div class="bannerText">
+        <div class="bannerTitle">热门推荐</div>
+        <div class="bannerSub">发现好音乐，点击即搜索</div>
+      </div>
+      <div class="bannerDisc"></div>
+    </div>
+    <div id="recGrid"></div>
+  </div>
+</section>
+
+<!-- ============ 页面: 搜索 ============ -->
+<section id="searchView" class="page" style="display:none">
+  <div class="pageHead">
+    <button id="backHome" class="navBtn" onclick="app.goHome()">&#10094;</button>
+    <div id="searchbox">
+      <input id="searchInput" type="search" placeholder="搜索歌曲 / 歌手" autocomplete="off" enterkeyhint="search">
+      <button id="searchBtn">搜索</button>
+    </div>
+    <select id="brSelect" class="brSel">
+      <option value="320kmp3">320k</option>
+      <option value="192kmp3">192k</option>
+      <option value="128kmp3">128k</option>
+    </select>
+  </div>
+  <div id="hotBox">
+    <span class="hotLabel">热门搜索</span>
+    <div id="hotList"></div>
+  </div>
+  <div id="resultsList"></div>
+  <div id="loadMore">上滑加载更多</div>
+</section>
+
+<!-- ============ 页面: 队列 ============ -->
+<section id="queueView" class="page" style="display:none">
+  <div class="pageHead">
+    <button class="navBtn" onclick="app.goHome()">&#10094;</button>
+    <span class="pageTitle">播放队列</span>
+    <button id="qpClear" class="linkBtn">清空</button>
+  </div>
+  <div id="queueList"></div>
+  <div id="queueEmpty" class="empty">队列为空，去搜索加歌</div>
+</section>
+
+<!-- ============ 底部导航 ============ -->
+<nav id="bottomNav">
+  <button class="navItem active" data-page="home"><span class="niIcon">&#8962;</span><span class="niText">首页</span></button>
+  <button class="navItem" data-page="search"><span class="niIcon">&#9906;</span><span class="niText">搜索</span></button>
+  <button class="navItem" data-page="queue"><span class="niIcon">&#8801;</span><span class="niText">队列</span></button>
+</nav>
+
+<!-- ============ 播放条 ============ -->
+<footer id="playbar" onclick="app.openPlayer()">
+  <div id="pbProgressMini"><div id="pbFillMini"></div></div>
+  <div id="pbRow">
+    <img id="pbCover" src="" alt="">
+    <div id="pbInfo">
+      <div id="pbTitle">未在播放</div>
+      <div id="pbArtist"></div>
+    </div>
+    <div id="pbBtns" onclick="event.stopPropagation()">
+      <button id="pbPrev" class="pb"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M6 6h2v12H6zM19 6v12l-9-6z"/></svg></button>
+      <button id="pbPlay" class="pb big"><svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>
+      <button id="pbNext" class="pb"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M16 6h2v12h-2zM5 18V6l9 6z"/></svg></button>
+    </div>
+  </div>
+</footer>
+
+<!-- ============ 全屏播放器 ============ -->
+<div id="player" style="display:none">
+  <div id="playerBg"><div class="bgImg"></div><div class="bgShade"></div></div>
+  <div id="playerHead">
+    <button id="playerClose" class="navBtn">&#9660;</button>
+    <div id="playerHeadTxt">正在播放</div>
+    <div class="spacer"></div>
+  </div>
+  <div id="playerCoverWrap"><img id="playerCover" src="" alt=""></div>
+  <div id="playerInfo">
+    <div id="playerTitle"></div>
+    <div id="playerArtist"></div>
+  </div>
+  <div id="playerLyrics">
+    <div id="lyricsScroll"><div id="lyricsLines"></div></div>
+    <div id="lyricsHint">暂无歌词</div>
+  </div>
+  <div id="playerControls">
+    <div id="playerProgress">
+      <span id="pbCur">0:00</span>
+      <div id="pbProgress"><div id="pbFill"></div><div id="pbDot"></div></div>
+      <span id="pbTotal">0:00</span>
+    </div>
+    <div id="playerBtns">
+      <button id="playerMode" class="pbtn" title="播放模式">&#128257;</button>
+      <button id="playerPrev" class="pbtn big"><svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M6 6h2v12H6zM19 6v12l-9-6z"/></svg></button>
+      <button id="playerPlay" class="pbtn play"><svg viewBox="0 0 24 24" width="34" height="34" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>
+      <button id="playerNext" class="pbtn big"><svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M16 6h2v12h-2zM5 18V6l9 6z"/></svg></button>
+      <button id="playerQueue" class="pbtn" title="播放队列"><svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M4 6h16v2H4zM4 11h16v2H4zM4 16h10v2H4z"/></svg></button>
+    </div>
+    <div id="playerVol">
+      <span id="volIcon">&#128266;</span>
+      <input id="pbVol" type="range" min="0" max="100" value="60">
+    </div>
+    <div id="playerTheme"></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
