@@ -436,20 +436,20 @@ def parse_lrc(lrc_text):
     if not lrc_text:
         return []
     out = []
+    pat = r"\[(\d{1,3}):(\d{2})(?:\.(\d{1,3}))?\]"
     for line in lrc_text.splitlines():
-        times = []
-        rest = line
-        for m in re.finditer(r"\[(\d{1,3}):(\d{2})(?:\.(\d{1,3}))?\]", line):
+        stamps = list(re.finditer(pat, line))
+        if not stamps:
+            continue                      # 无时间标签 (元数据/空行): 跳过
+        text = line[stamps[-1].end():].strip()
+        if not text:
+            continue
+        for m in stamps:
             minute = int(m.group(1))
             sec = int(m.group(2))
             ms_str = (m.group(3) or "0").ljust(3, "0")[:3]
             ms = minute * 60000 + sec * 1000 + int(ms_str)
-            times.append(ms)
-            rest = rest[m.end():]
-        text = rest.strip()
-        if text:
-            for t in times:
-                out.append((t, text))
+            out.append((ms, text))
     out.sort(key=lambda x: x[0])
     # 合并同时间同文本的重复行
     dedup = []

@@ -22,16 +22,18 @@ import tkinter.font as tkfont
 from tkinter import messagebox, ttk
 from PIL import Image
 
-from kuwo import KuwoAPI
+from .kuwo import KuwoAPI
 import requests
-from widgets import PICTRUE, load_image, BgLabel, \
+from .widgets import PICTRUE, load_image, BgLabel, \
     ImagePanel, Carousel, RecommendGrid, ImageCheckList, ImageList, \
     apply_tk_theme, LyricsPanel, ProgressBar, BORDER_HEX, \
     round_cover_photo, placeholder_cover
-from engine import default_engine, MciEngine, open_path
-import dialogs
-import widgets
-from lyrics import parse_lrc, read_uslt, read_cover, fetch_lyrics, save_lrc
+from .engine import default_engine, MciEngine, open_path
+from . import dialogs
+from . import widgets
+from .util import split_artists
+from .paths import SETTINGS_PATH
+from .lyrics import parse_lrc, read_uslt, read_cover, fetch_lyrics, save_lrc
 
 
 def ui_font(*sizes):
@@ -55,29 +57,6 @@ def init_global_font():
             tkfont.nametofont(name).configure(family=family, size=11)
         except Exception:  # noqa: BLE001
             pass
-
-
-_ARTIST_SEP = (" / ", "/", "\uff0f", "\u3001", "\u300b", "\u300d",
-               ";", "\uff1b", "&", "|", "\u00b7", "feat.", "Feat.", ",")
-
-
-def split_artists(artist):
-    """把 ID3 多歌手串拆成单独歌手列表 (如 'We Talk / 陈奕迅' → ['We Talk','陈奕迅'])。"""
-    s = str(artist or "").strip()
-    if not s:
-        return []
-    parts = [s]
-    for sep in _ARTIST_SEP:
-        nxt = []
-        for p in parts:
-            nxt.extend(p.split(sep))
-        parts = nxt
-    out = []
-    for p in parts:
-        p = p.strip()
-        if p and p not in out:
-            out.append(p)
-    return out
 
 
 def _probe_meta(path):
@@ -107,7 +86,7 @@ def _probe_meta(path):
         pass
     if not dur or not artist:
         try:
-            from lyrics import read_meta
+            from .lyrics import read_meta
             _t, _a, _d = read_meta(path)
             if not artist:
                 artist = _a or ""
@@ -339,8 +318,7 @@ class MainWindow:
         self._pb_vol_val = 50
         self._pb_muted = False
         self._pb_vol_prev = 50
-        self._settings_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "settings.json")
+        self._settings_path = SETTINGS_PATH
         self._cover_by_title = {}   # 歌名(显示名) → 封面 URL (搜索结果)
         self._cover_cache = {}      # 封面 URL → 已缓存 PhotoImage
         self._dl_br = "320kmp3"     # 下载/在线播放音质 (320kmp3/192kmp3/128kmp3)
@@ -2074,8 +2052,13 @@ class MainWindow:
             print("读取下载目录失败:", exc)
 
 
-if __name__ == "__main__":
+def main():
+    """应用入口 (控制台脚本 / ``python -m musicplayer`` 调用)。"""
     MainWindow()
+
+
+if __name__ == "__main__":
+    main()
 
 
 

@@ -45,11 +45,16 @@
 ## 运行
 
 ```bash
-pip install pillow requests
-python main.py
+pip install -r requirements.txt
+python run.py                 # 便捷启动 (无需安装)
+
+# 或安装为包后
+pip install -e .
+musicplayer                   # 控制台脚本
+python -m musicplayer         # 模块方式
 ```
 
-播放引擎自动选择（`engine.default_engine()`）：
+播放引擎自动选择（`musicplayer.engine.default_engine()`）：
 - 装了 `pygame` → 跨平台 `CrossPlatformEngine`（macOS/Windows/Linux 皆可）
 - **Windows 且未装 pygame → 自动回退 WinMM MCI 引擎（`engine.MciEngine`，零依赖，无需 pygame）**
 
@@ -61,14 +66,42 @@ pip install pystray
 
 未安装 pystray 时最小化按钮在无边框窗口下保持现状（有托盘环境的机器上完美还原托盘收起/双击打开/右键菜单）。
 
-## 文件结构
+## 项目结构
 
-| 文件 | 对应原 Java 文件 | 说明 |
+标准 `src` 布局（可 `pip install -e .` 安装）：
+
+```
+MusicPlayer-Py/
+├── pyproject.toml           # 打包/依赖/控制台脚本
+├── requirements.txt
+├── run.py                   # 便捷启动 (把 src 加入 sys.path)
+├── tests/
+│   └── test_core.py         # 纯逻辑单元测试 (pytest 兼容)
+└── src/
+    └── musicplayer/
+        ├── __init__.py
+        ├── __main__.py      # python -m musicplayer
+        ├── app.py           # 主界面/全部事件 (原 main.py)
+        ├── widgets.py       # 自定义组件 (面板/列表/推荐格/播放条/歌词面板)
+        ├── dialogs.py       # 主题色/存储位置/本地扫描/播放队列窗口 + 托盘
+        ├── kuwo.py          # 酷我搜索 / 直链 / 下载
+        ├── lyrics.py        # 纯 Python ID3v2 读写 + 歌词抓取 + LRC 解析
+        ├── engine.py        # 播放引擎 (pygame + Windows MCI 回退)
+        ├── paths.py         # 资产/数据目录解析
+        ├── util.py          # 通用工具 (split_artists 等)
+        └── assets/Pictrue/  # 图片资源
+```
+
+数据目录（`paths.py`）：源码布局下 `music/`（下载）与 `settings.json` 位于**项目根**；已安装布局下位于 `~/MusicPlayer/`。资产固定随包（`assets/Pictrue`）。
+
+## 模块说明
+
+| 模块 (`src/musicplayer/`) | 对应原 Java 文件 | 说明 |
 | --- | --- | --- |
 | `kuwo.py` | `Search.java` / `Function.saveMusicFile` | 酷我搜索 / 播放直链 / 下载 |
 | `widgets.py` | `MyMusicPanel` / `SearchPanel` / `SlidePanel` / `MyJcheckBox` | 背景合成组件、轮播图、推荐网格、复选框列表 |
-| `dialogs.py` | `ChangeBackground` / `StorageLocation` / `ReadLocalMusic` | 换肤、存储位置、本地扫描窗口 |
-| `main.py` | `Maininterface.java` / `Function.java` | 主界面、层级切换、全部事件 |
+| `dialogs.py` | `ChangeBackground` / `StorageLocation` / `ReadLocalMusic` | 主题色、存储位置、本地扫描窗口 |
+| `app.py` | `Maininterface.java` / `Function.java` | 主界面、层级切换、全部事件 |
 | `lyrics.py` | — | 纯 Python ID3v2 USLT 嵌入/读取、Q音/网易云/酷我歌词抓取、LRC 解析 |
 | `engine.py` | — | 播放引擎工厂：pygame 跨平台引擎 + Windows winmm MCI 回退引擎 |
 
@@ -128,6 +161,8 @@ pip install pystray
   - **搜索双击播放 + 播放队列**：搜索结果双击直接在线播放；控制栏「加入队列」勾选歌曲入队，播放条「队列」打开 `QueueDialog`（序号列表、双击跳播、清空）；在线项播放时自动下载到临时目录；
   - **快捷键 + 静音**：空格=播放/暂停、←→=±5s、↑↓=音量（搜索框输入时忽略）；播放条喇叭按钮记忆音量一键静音；
   - **下载进度 + 失败重试**：`kuwo.download` 增 `on_progress(bytes)`，下载管理第 4 列实时显示「下载中 x.xMB → ✓ 完成 / 失败·双击重试」，失败行双击自动用记录的信息重下。
+- **启动优化**：`to_photo` 改用 `PIL.ImageTk.PhotoImage`（比 base64 PNG 重建更快，缺失时自动回落）；`RecommendGrid` 首屏 20 张卡片改为窗口首帧后延迟绘制（`draw_deferred`），列表填充延后到 `_poll_ui`（250ms）。`MainWindow` 构造 ~1.03s → ~0.75s。
+- **项目结构重构为标准 src 布局**：源码移入 `src/musicplayer/`（`main.py`→`app.py`，图像资源移至 `assets/Pictrue/`），新增 `paths.py`（资产/数据目录解析，兼容源码与已安装布局）、`util.py`、`__init__.py`、`__main__.py`；根目录新增 `run.py` 与 `pyproject.toml`（含 `musicplayer` 控制台脚本）、`tests/test_core.py`（pytest 兼容纯逻辑测试，顺带修复 `parse_lrc` 同行多时间戳切片偏移 bug）；模块内导入改为相对导入。支持 `python run.py`、`pip install -e .` 后 `musicplayer` / `python -m musicplayer`。
 
 ## 提示
 

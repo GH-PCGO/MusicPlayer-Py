@@ -18,7 +18,7 @@ import tkinter.ttk as ttk
 
 from PIL import Image, ImageDraw, ImageFont
 
-PICTRUE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Pictrue")
+from .paths import PICTRUE
 
 # 共享主题背景 (对应原 MyMusicPanel.path / SearchPanel.path)
 MAIN_BG = os.path.join(PICTRUE, "logo.jpg")

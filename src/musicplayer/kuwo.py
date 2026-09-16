@@ -244,7 +244,7 @@ class KuwoAPI:
                                 except Exception:  # noqa: BLE001
                                     pass
                 try:
-                    from lyrics import (fetch_lyrics, embed_lyrics,
+                    from .lyrics import (fetch_lyrics, embed_lyrics,
                                         embed_cover, save_lrc, lrc_to_plain)
                     name = title or os.path.splitext(filename)[0]
                     lrc = fetch_lyrics(rid, name, artist,

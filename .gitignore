@@ -6,6 +6,9 @@ __pycache__/
 .eggs/
 build/
 dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # 运行时生成
 settings.json

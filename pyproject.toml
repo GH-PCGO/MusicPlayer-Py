@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "musicplayer-py"
+version = "1.0.0"
+description = "音乐下载器 (Python + Tkinter 复刻版): 搜索 / 下载 / 播放 / 歌词"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "GH-PCGO" }]
+keywords = ["music", "tkinter", "downloader", "player", "kuwo"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Multimedia :: Sound/Audio",
+]
+dependencies = [
+    "pillow>=9.0",
+    "requests>=2.28",
+]
+
+[project.optional-dependencies]
+audio = ["pygame>=2.3"]     # 跨平台播放引擎 (Windows 缺省回退 winmm MCI)
+tray = ["pystray>=0.19"]    # 系统托盘
+meta = ["mutagen>=1.46"]    # 更精确的时长/标签 (缺失时用内置纯 Python 解析)
+
+[project.scripts]
+musicplayer = "musicplayer.app:main"
+
+[project.urls]
+Homepage = "https://github.com/GH-PCGO/MusicPlayer-Py"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+musicplayer = ["assets/Pictrue/*"]

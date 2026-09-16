@@ -16,11 +16,10 @@ from tkinter import filedialog, messagebox
 
 from PIL import Image, ImageDraw
 
-from widgets import PICTRUE, MAIN_BG, SEARCH_BG, FONT_FAMILY, load_image, \
+from .widgets import PICTRUE, MAIN_BG, SEARCH_BG, FONT_FAMILY, load_image, \
     to_photo, cover_crop, ACCENT_HEX, ACCENT_DK_HEX, ACCENT_TXT_HEX, \
     ACCENT_SOFT_HEX
-
-DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "music")
+from .paths import DOWNLOAD_DIR
 
 # 换肤窗口里的 5 个选择 (与原 ChangeBackground.java 坐标/尺寸一致):
 #   b1 (40,60) b2 (300,60) b3 (40,540) b4 (300,540) b5 (600,60), 均 220x330
