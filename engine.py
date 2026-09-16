@@ -48,11 +48,144 @@ def open_path(path):
         return False
 
 
-def default_engine():
-    """按平台选择引擎: 均为 pygame.mixer 实现的 CrossPlatformEngine。
+class MciEngine:
+    """Windows 原生 MCI 播放引擎 (winmm.mciSendString): 无需 pygame 等第三方库。
 
-    保留此工厂以便将来需要时替换不同后端。
+    仅在 pygame 缺失且系统为 Windows 时由 default_engine() 选用。
+    接口与 CrossPlatformEngine 完全一致: start/play/pause/resume/seek/
+    setvol/stop, 状态 st = {"ok","state","dur","pos","err"}。
     """
+
+    ALIAS = "appplay"
+
+    def __init__(self):
+        self.cmds = queue.Queue()
+        self.st = {"ok": False, "state": 0, "dur": 0.0, "pos": 0.0,
+                   "err": ""}
+        self._t = None
+
+    def start(self):
+        if self._t is not None:
+            return
+        self._t = threading.Thread(target=self._run, daemon=True)
+        self._t.start()
+
+    def _run(self):
+        import ctypes
+        mci = ctypes.windll.winmm.mciSendStringW
+
+        def send(cmd):
+            buf = ctypes.create_unicode_buffer(512)
+            r = mci(cmd, buf, 512, 0)
+            return r, buf.value
+
+        try:
+            r, _ = send("open new type waveaudio alias _test")
+            if r == 0:
+                send("close _test")
+            self.st["ok"] = True
+        except Exception as exc:  # noqa: BLE001
+            self.st["err"] = str(exc)
+            return
+
+        current_path = None
+        loaded_path = None
+
+        while True:
+            try:
+                cmd = self.cmds.get(timeout=0.25)
+            except queue.Empty:
+                cmd = None
+            try:
+                if cmd is not None:
+                    kind = cmd.get("kind")
+                    if kind == "play":
+                        if current_path:
+                            send("close %s" % self.ALIAS)
+                        path = cmd["path"]
+                        r, _ = send('open "%s" alias %s type mpegvideo'
+                                    % (path, self.ALIAS))
+                        if r == 0:
+                            send("set %s time format milliseconds"
+                                 % self.ALIAS)
+                            send("play %s" % self.ALIAS)
+                            current_path = path
+                            loaded_path = None      # 需重新取时长
+                        else:
+                            self.st["err"] = "MCI open failed: %d" % r
+                    elif kind == "pause":
+                        send("pause %s" % self.ALIAS)
+                    elif kind == "resume":
+                        send("play %s" % self.ALIAS)
+                    elif kind == "seek":
+                        ms = int(float(cmd["v"]) * 1000)
+                        send("seek %s to %d" % (self.ALIAS, ms))
+                        send("play %s" % self.ALIAS)
+                    elif kind == "setvol":
+                        vol = int(float(cmd["v"]))
+                        vol16 = max(0, min(65535, vol * 65535 // 100))
+                        ctypes.windll.winmm.waveOutSetVolume(
+                            0, vol16 | (vol16 << 16))
+                    elif kind == "stop":
+                        send("stop %s" % self.ALIAS)
+                        current_path = None
+                        loaded_path = None
+                        self.st["dur"] = 0.0
+                    elif kind == "shutdown":
+                        break
+            except Exception as exc:  # noqa: BLE001
+                self.st["err"] = str(exc)
+            # 状态轮询: 仅在已加载曲目时执行
+            if current_path:
+                try:
+                    _, mode = send("status %s mode" % self.ALIAS)
+                    mode = mode.lower().strip()
+                    self.st["state"] = (3 if mode == "playing" else
+                                        2 if mode == "paused" else
+                                        1 if mode == "stopped" else 0)
+                    _, pos_s = send("status %s position" % self.ALIAS)
+                    self.st["pos"] = float(pos_s) / 1000.0 if pos_s else 0.0
+                    if loaded_path != current_path:
+                        _, len_s = send("status %s length" % self.ALIAS)
+                        if len_s:
+                            self.st["dur"] = float(len_s) / 1000.0
+                        loaded_path = current_path
+                except Exception:  # noqa: BLE001
+                    pass
+
+    def play(self, path):
+        self.cmds.put({"kind": "play", "path": path})
+
+    def pause(self):
+        self.cmds.put({"kind": "pause"})
+
+    def resume(self):
+        self.cmds.put({"kind": "resume"})
+
+    def seek(self, v):
+        self.cmds.put({"kind": "seek", "v": v})
+
+    def setvol(self, v):
+        self.cmds.put({"kind": "setvol", "v": v})
+
+    def stop(self):
+        self.cmds.put({"kind": "stop"})
+
+    def shutdown(self):
+        self.cmds.put({"kind": "shutdown"})
+
+
+def default_engine():
+    """按平台选择引擎。
+
+    - pygame 可用 → CrossPlatformEngine (macOS/Windows/Linux)
+    - pygame 缺失且 Windows → MciEngine (winmm, 零依赖)
+    - 其他平台无 pygame → CrossPlatformEngine (将提示缺少 pygame)
+    """
+    if _HAS_PYGAME:
+        return CrossPlatformEngine()
+    if sys.platform == "win32":
+        return MciEngine()
     return CrossPlatformEngine()
 
 

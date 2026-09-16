@@ -457,3 +457,119 @@ def parse_lrc(lrc_text):
         if not dedup or dedup[-1][0] != t or dedup[-1][1] != txt:
             dedup.append((t, txt))
     return dedup
+
+
+# ============================================================ MP3 元数据 (纯 Python)
+def _decode_id3_text(fdata):
+    """解码 ID3v2 文本帧 body → str。"""
+    if not fdata:
+        return ""
+    enc = fdata[0]
+    raw = fdata[1:]
+    try:
+        if enc == 0:
+            return raw.decode("latin-1").split("\x00")[0].strip()
+        if enc == 1:
+            return raw.decode("utf-16").split("\x00")[0].strip()
+        if enc == 2:
+            return raw.decode("utf-16-be").split("\x00")[0].strip()
+        return raw.decode("utf-8", errors="replace").split("\x00")[0].strip()
+    except Exception:  # noqa: BLE001
+        try:
+            return raw.decode("utf-8", errors="replace").split("\x00")[0].strip()
+        except Exception:  # noqa: BLE001
+            return ""
+
+
+def read_id3_tags(path):
+    """纯 Python 读取 ID3v2 标题/歌手, 返回 (title, artist)。无标签返回 ("","")。"""
+    title = artist = ""
+    try:
+        with open(path, "rb") as f:
+            header = f.read(10)
+            if len(header) < 10 or header[:3] != b"ID3":
+                return "", ""
+            ver = header[3]
+            size = _syncsafe_decode(header[6:10])
+            tag_data = f.read(size)
+        frames, _ = _parse_frames(tag_data, ver)
+        for fid, _fs, _ff, fdata in frames:
+            if fid == b"TIT2":
+                title = _decode_id3_text(fdata)
+            elif fid == b"TPE1":
+                artist = _decode_id3_text(fdata)
+        return title, artist
+    except Exception:  # noqa: BLE001
+        return "", ""
+
+
+_V1L3_BITRATE = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224,
+                 256, 320, 0]
+_V2L3_BITRATE = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144,
+                 160, 0]
+_SR = {3: [44100, 48000, 32000], 2: [22050, 24000, 16000],
+       0: [11025, 12000, 8000]}
+
+
+def mp3_duration(path):
+    """纯 Python 估算 MP3 时长 (秒)。支持 ID3v2 跳过与 Xing/Info VBR 帧数。"""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            data = f.read(10)
+            start = 0
+            if len(data) >= 10 and data[:3] == b"ID3":
+                start = 10 + _syncsafe_decode(data[6:10])
+            f.seek(start)
+            buf = f.read(4096)
+        if len(buf) < 4:
+            return 0.0
+        i = 0
+        while i < len(buf) - 4:
+            if buf[i] == 0xFF and (buf[i + 1] & 0xE0) == 0xE0:
+                break
+            i += 1
+        if i >= len(buf) - 4:
+            return 0.0
+        h = buf[i:i + 4]
+        ver_bits = (h[1] >> 3) & 0x03        # 3=MPEG1, 2=MPEG2, 0=MPEG2.5
+        layer_bits = (h[1] >> 1) & 0x03
+        br_idx = (h[2] >> 4) & 0x0F
+        sr_idx = (h[2] >> 2) & 0x03
+        padding = (h[2] >> 1) & 0x01
+        channel = (h[3] >> 6) & 0x03
+        if ver_bits == 1 or layer_bits != 1 or br_idx in (0, 15) or sr_idx == 3:
+            return 0.0
+        if ver_bits == 3:                    # MPEG1 Layer III
+            bitrate = _V1L3_BITRATE[br_idx] * 1000
+            spf, sr = 1152, _SR[3][sr_idx]
+            side = 17 if channel == 3 else 32
+            flen = 144 * bitrate // sr + padding
+        else:                                # MPEG2 / 2.5 Layer III
+            bitrate = _V2L3_BITRATE[br_idx] * 1000
+            spf, sr = 576, _SR[ver_bits][sr_idx]
+            side = 9 if channel == 3 else 17
+            flen = 72 * bitrate // sr + padding
+        if not bitrate or not sr or flen <= 4:
+            return 0.0
+        # Xing/Info VBR 头: 帧头 4 + 可选 CRC 2 + side info
+        off = i + 4 + side
+        if i + 4 + side + 12 <= len(buf):
+            tag = buf[off:off + 4]
+            if tag in (b"Xing", b"Info"):
+                flags = int.from_bytes(buf[off + 4:off + 8], "big")
+                if flags & 0x01:
+                    frames = int.from_bytes(buf[off + 8:off + 12], "big")
+                    if frames > 0:
+                        return frames * spf / float(sr)
+        audio_bytes = max(0, size - start)
+        return audio_bytes * 8.0 / bitrate
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def read_meta(path):
+    """读取 (标题, 歌手, 时长秒): 优先 ID3 标签; 时长由 MP3 帧估算。"""
+    title, artist = read_id3_tags(path)
+    dur = mp3_duration(path)
+    return title, artist, dur

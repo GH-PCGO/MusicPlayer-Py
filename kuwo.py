@@ -176,15 +176,27 @@ class KuwoAPI:
             raise IOError("mobi.s 未返回播放地址(br=%s)" % br)
         return url
 
-    def _mobi_stream(self, rid):
-        """优先 320k, 失败回落 128k, 返回 (mp3流, 实际码率参数)。"""
-        for br in ("320kmp3", "128kmp3"):
+    # 音质档位 → (首选码率, 回落链)
+    QUALITY = {
+        "high": ("320kmp3", ("320kmp3", "192kmp3", "128kmp3")),
+        "mid": ("192kmp3", ("192kmp3", "128kmp3")),
+        "low": ("128kmp3", ("128kmp3",)),
+    }
+
+    def _mobi_stream(self, rid, br="320kmp3"):
+        """按首选码率获取音频流, 失败沿回落链下降, 返回 (流, 实际码率参数)。"""
+        chain = ("320kmp3", "192kmp3", "128kmp3")
+        if br == "192kmp3":
+            chain = ("192kmp3", "128kmp3")
+        elif br == "128kmp3":
+            chain = ("128kmp3",)
+        for b in chain:
             try:
-                url = self._mobi_url(rid, br)
+                url = self._mobi_url(rid, b)
                 stream = self._session.get(url, timeout=self.timeout,
                                            stream=True)
                 stream.raise_for_status()
-                return stream, br
+                return stream, b
             except Exception:  # noqa: BLE001
                 continue
         return None, None
@@ -201,20 +213,22 @@ class KuwoAPI:
         return resp
 
     def download(self, rid, filename, folder, on_done=None,
-                 on_progress=None, title="", artist="", cover=None):
+                 on_progress=None, title="", artist="", cover=None,
+                 br="320kmp3"):
         """下载完整 mp3 到 folder, 支持回调 (线程中执行)。文件名保持《歌名》.mp3。
 
         on_done(path):   完成回调 (失败时 path=None)。
         on_progress(bytes_done): 分块进度回调 (已写入字节数)。
+        br: 首选码率 (320kmp3/192kmp3/128kmp3), 失败自动回落。
         cover(url): 封面图片 URL, 下载完成后写入 ID3v2 APIC 帧 (播放条/系统播放器
            均可显示头像)。下载完成后自动嵌入 ID3v2 歌词 (WMP 可显示) 并保存
-           同名 .lrc 文件。
+            同名 .lrc 文件。
         """
         def worker():
             path = None
             try:
                 os.makedirs(folder, exist_ok=True)
-                stream, _br = self._mobi_stream(rid)   # 主链路: 完整全曲
+                stream, _br = self._mobi_stream(rid, br)  # 主链路: 完整全曲
                 if stream is None:
                     stream = self._anti(rid)           # 兜底: antiserver 试听
                 path = os.path.join(folder, filename)

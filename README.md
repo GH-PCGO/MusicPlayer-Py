@@ -49,6 +49,10 @@ pip install pillow requests
 python main.py
 ```
 
+播放引擎自动选择（`engine.default_engine()`）：
+- 装了 `pygame` → 跨平台 `CrossPlatformEngine`（macOS/Windows/Linux 皆可）
+- **Windows 且未装 pygame → 自动回退 WinMM MCI 引擎（`engine.MciEngine`，零依赖，无需 pygame）**
+
 若需托盘最小化：
 
 ```bash
@@ -66,6 +70,7 @@ pip install pystray
 | `dialogs.py` | `ChangeBackground` / `StorageLocation` / `ReadLocalMusic` | 换肤、存储位置、本地扫描窗口 |
 | `main.py` | `Maininterface.java` / `Function.java` | 主界面、层级切换、全部事件 |
 | `lyrics.py` | — | 纯 Python ID3v2 USLT 嵌入/读取、Q音/网易云/酷我歌词抓取、LRC 解析 |
+| `engine.py` | — | 播放引擎工厂：pygame 跨平台引擎 + Windows winmm MCI 回退引擎 |
 
 ## 改动记录
 
@@ -104,6 +109,18 @@ pip install pystray
 - **歌词获取按钮**：无歌词（无 `.lrc`、无嵌入 USLT、或获取失败）时，歌词面板显示「获取歌词」按钮（`LyricsPanel` 新增 `set_fetch_callback`/`_on_fetch`/`finish_fetch`，点击后按钮变「获取中...」禁用态）。`main.py` 的 `_fetch_lyrics_for_current` 按文件名解析歌名（支持 `《歌名》.mp3` 与 `歌名.mp3`），后台线程多源抓取（酷我→QQ音乐→网易云），成功后写入歌词面板并落地同名 `.lrc` 侧车文件（下次直接读取），失败则恢复按钮提示重试；切歌后丢弃过期结果（对比 `_pb_path`）。已实测：无歌词→按钮显示→点击→38 行歌词加载、按钮隐藏、`.lrc` 落盘。
 - **搜索列表无限滚动**：去掉「上一页/下一页」按钮与 30 首限制。`_BgCanvasList` 新增 `on_scroll_end` 回调（滚轮滚动后检测 `yview()[1] >= 0.95` 触发，`_bottom_fired` 防抖）；`ImageCheckList.append_rows`/`ImageList.append_rows` 追加数据并保留滚动位置（不重置到顶部）。`main.py` 的 `_load_more` 异步加载下一页、追加到列表、编号连续、`_has_more`（满 30 条才继续）与 `_active_search_seq` 守卫（换搜索即丢弃过期分页结果）。工具栏改为提示文字「滚动到底部自动加载更多」。已实测 30→60→90 条连续加载、滚动位置保持。
 - **在线播放改为 APP 内直接播放**：搜索结果的「播放」按钮不再 `webbrowser.open` 跳浏览器，改为 `api.download` 下载到系统临时目录 `%TEMP%\musicplayer_online`，下载线程完成回调经 `_ui_queue` 回主线程后走 MCI 引擎进程内播放（`_online_ready`/`_online_ready_ui`）；加载期间播放条显示「正在加载：歌名」。已实测：`webbrowser.open` 调用 0 次、临时文件下载、`state=3` 进程内播放。
+- **Windows 无 pygame 播放回退**：`engine.py` 新增 `MciEngine`（winmm.mciSendString / waveOutSetVolume，零依赖），`default_engine()` 自动选择——pygame 可用走跨平台 `CrossPlatformEngine`，Windows 未装 pygame 自动回退 `MciEngine`，解决「缺少 pygame」导致无法播放的问题。实测：未装 pygame 的 Windows 上引擎 `ok=True`、进程内播放 `state=3`、暂停/seek 正常。
+- **本地音乐启动自动加载**：`_load_download_dir` 在启动后台读取默认存储目录时，同时把歌曲填充到「本地音乐」列表（`local_paths`/`local_list`，含时长/歌手探读），打开 APP 即自动获取默认存储位置的歌曲；`add_local_song` 增加按路径去重，扫描默认目录不会重复加入。
+- **进入本地音乐不再自动弹窗**：移除 `show_local_music` 里自动弹出扫描窗口的逻辑；本地面板右上角新增「扫描文件夹」按钮，需要时手动点开 `LocalScanDialog`。
+- **面板顶栏被遮挡修复**：下载管理 / 本地音乐面板原放在 `y=0`，其标题与操作按钮被常驻搜索顶栏（`y=0..64`）盖住导致不可见；现将两个面板下移到 `y=64`（与内容区对齐），标题「下载管理 / 本地音乐」及「扫描文件夹」「加入队列 / 删除 / 本地打开」按钮全部可见，并按文字宽度调整按钮尺寸避免截断。
+- **下载/播放音质选择**：搜索控制栏新增「音质」下拉（高品质 320k / 较高 192k / 标准 128k），选择写入 `settings.json` 的 `br` 字段并在启动恢复。`kuwo.download(..., br=)` 与 `_mobi_stream(rid, br)` 支持指定首选码率并沿回落链下降（320k→192k→128k）；下载、失败重试、在线临时播放统一使用所选音质。注：mobi.s 签名接口的 flac/ape 返回与 320k 相同，非真无损，故未提供无损档。实测 128k/320k 均按所选码率返回。
+- **交互细节修复**：① 播放条**封面/歌名区域可点击跳转歌词界面**（`_open_lyrics`，已显示时不关闭）；② 搜索控制栏「加入队列」按钮加宽到 96px（原 76px 导致「列」被截断）、音质下拉加宽到 142px，播放条右侧按钮重排留出右边距；③ **音量滑杆/静音按钮上滚轮可调节音量**（`_on_vol_wheel`，每格 ±4，钳制 0..100）。
+- **列表元数据与筛选/搜索**：
+  - `mutagen` 缺失时新增**纯 Python** 回退（`lyrics.read_id3_tags` 解析 ID3v2 TIT2/TPE1；`lyrics.mp3_duration` 按 MP3 帧头/Xing 估算时长），`_probe_meta` 自动选用；下载管理与本地音乐列表现显示**序号/歌名/歌手/时长/大小/状态**（本地列表改用 6 列 `DownloadList`）。
+  - 两个面板新增**搜索框**（按歌名/歌手模糊匹配，250ms 防抖）与**歌手下拉筛选**（自动汇总去重歌手）；`_dl_view`/`_local_view` 维护过滤后视图，双击播放/删除/显示目录等按视图索引正确映射；状态列显示 下载中x.xMB/完成/失败·双击重试/缺失，完成绿色。
+  - 修复：歌手下拉筛选原读取 `self._dl_artist` 但选择只改控件值 → 无效果；现 `_dl_apply_filter`/`_local_apply_filter` 开头从下拉框回读当前选择。
+  - 修复：下拉框未显示所选歌手/名称被截断——改用 `textvariable` 稳定显示并加宽到 160px；`split_artists` 按多种分隔符（`/`、`、`、`』`、`&` 等，部分酷我标签用 `』` 作分隔）拆分多歌手串，下拉显示单个歌手，筛选改为包含匹配（选「陈奕迅」可匹配「We Talk / 陈奕迅」）。
+  - 已用 12 项自动化测试验证（六列内容、歌手/时长/大小/状态非空、歌手筛选、关键词搜索、视图索引映射）。
 - **播放器进阶（对照成熟播放器）**：
   - **播放模式**：播放条 🔁 按钮在 顺序/列表循环/单曲循环/随机 间循环（与上一首/下一首/播放三键成组）；`_poll_player` 检测 `state 3→stopped` 触发 `_pb_auto_next`——单曲重播、列表循环回绕、随机随机索引、顺序播完即停；手动上一首/下一首始终 ±1；
   - **状态持久化**：`settings.json` 存 `{mode,volume,muted}`，模式切换/音量/静音/退出时保存，启动恢复（**不自动播放**）；
