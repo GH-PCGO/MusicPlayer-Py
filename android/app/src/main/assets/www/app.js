@@ -20,7 +20,7 @@ const state = {
   queue: [], idx: -1,
   results: [], resultBase: 0, page: 1, kw: "", hasMore: false, loadingMore: false,
   lyrics: [], lyrDragging: false, lyrTranslate: null, pendingSeek: null, errorCount: 0,
-  history: [],
+  history: [], lastPlayAt: 0,
   page: "home",
 };
 
@@ -469,6 +469,7 @@ async function playTrack(track, index, seekTo) {
   const seq = ++_playSeq;
   state.idx = index;
   state.errorCount = 0;
+  state.lastPlayAt = Date.now();   // 切歌时间戳: 过滤旧音频的 ended/error 误触发
   // 只有显式传入 seekTo 才应用跳转 (恢复续播 / 播放器拖动), 避免旧进度串到新歌
   state.pendingSeek = (seekTo != null && seekTo > 0) ? seekTo : null;
   updateNowPlaying(track, 0, 0);
@@ -594,6 +595,8 @@ function pushHistory(idx) {
   if (state.history.length > 50) state.history.shift();
 }
 function onEnded() {
+  // 切歌后短时间内旧音频可能触发 ended/error, 直接忽略 (避免误切歌/污染历史)
+  if (Date.now() - state.lastPlayAt < 1500) return;
   const n = state.queue.length;
   if (!n) { setPlayIcons(false); saveState(); return; }
   let next;
@@ -893,6 +896,7 @@ function bindEvents() {
   });
   audio.addEventListener("ended", onEnded);
   audio.addEventListener("error", () => {
+    if (Date.now() - state.lastPlayAt < 1500) return;   // 切歌瞬间的旧音频错误忽略
     if (!currentTrack()) { toast("播放失败"); setPlayIcons(false); return; }
     state.errorCount = (state.errorCount || 0) + 1;
     if (state.errorCount >= 3) {
