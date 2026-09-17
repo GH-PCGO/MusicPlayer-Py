@@ -20,6 +20,7 @@ const state = {
   queue: [], idx: -1,
   results: [], resultBase: 0, page: 1, kw: "", hasMore: false, loadingMore: false,
   lyrics: [], lyrDragging: false, lyrTranslate: null, pendingSeek: null, errorCount: 0,
+  history: [],
   page: "home",
 };
 
@@ -322,6 +323,7 @@ async function playByName(name, artist) {
     renderResults(items, false);
     state.queue = items.slice(0);
     state.idx = 0;
+    state.history = [];
     playTrack(state.queue[0], 0);
     openPlayer();
   } catch (e) {
@@ -422,6 +424,7 @@ function playFromResults(i) {
   if (!track) return;
   state.queue = state.results.slice(i);
   state.idx = 0;
+  state.history = [];
   playTrack(state.queue[0], 0);
 }
 function addToQueue(track) {
@@ -444,13 +447,13 @@ function renderQueuePage() {
       (i === state.idx ? '<span class="qmark">\u25B6</span>' : "");
     row.addEventListener("click", () => {
       if (i === state.idx) togglePlay();
-      else playTrack(state.queue[i], i);
+      else { pushHistory(state.idx); playTrack(state.queue[i], i); }
     });
     list.appendChild(row);
   });
 }
 function clearQueue() {
-  state.queue = []; state.idx = -1;
+  state.queue = []; state.idx = -1; state.history = [];
   audio.pause(); audio.removeAttribute("src");
   updateNowPlaying(null, 0, 0);
   setPlayIcons(false);
@@ -565,10 +568,30 @@ function togglePlay() {
 function prevNext(d) {
   const n = state.queue.length;
   if (!n) return;
-  let i = state.idx;
-  if (i < 0) i = d > 0 ? 0 : n - 1;
-  else i = (i + d + n) % n;
+  const cur = state.idx;
+  let i;
+  if (d > 0) {
+    // 下一首: 随机模式随机挑一首 (避免与当前相同); 其它模式顺序 +1
+    if (cur >= 0) pushHistory(cur);
+    if (state.mode === 3 && n > 1) {
+      do { i = Math.floor(Math.random() * n); } while (i === cur);
+    } else {
+      i = cur < 0 ? 0 : (cur + 1) % n;
+    }
+  } else {
+    // 上一首: 随机模式回退到上一首播过的 (历史栈); 无历史则顺序 -1
+    if (state.mode === 3 && state.history.length) {
+      i = state.history.pop();
+    } else {
+      i = cur < 0 ? n - 1 : (cur - 1 + n) % n;
+    }
+  }
   playTrack(state.queue[i], i);
+}
+function pushHistory(idx) {
+  if (idx < 0) return;
+  state.history.push(idx);
+  if (state.history.length > 50) state.history.shift();
 }
 function onEnded() {
   const n = state.queue.length;
@@ -597,6 +620,7 @@ function onEnded() {
   } else {
     next = (state.idx + 1) % n;
   }
+  pushHistory(state.idx);   // 自动切歌也记入历史, 便于随机模式"上一首"回退
   playTrack(state.queue[next], next);
 }
 function cycleMode() {
