@@ -371,6 +371,60 @@ class MainWindow:
         self.show_home()
         # 启动优化: 推荐卡片较重, 等窗口首帧显示后再绘制
         self.root.after(120, self.recommend_grid.draw_deferred)
+        # 后台抓取真实热榜 (失败时保留静态推荐)
+        self.root.after(250, self._load_hot_recommend)
+
+    # ---------------------------------------------------- 首页真实热榜
+    def _load_hot_recommend(self):
+        """后台抓取网易云热榜: 先显示热榜名(占位封面), 再并行下载封面刷新。"""
+        def worker():
+            try:
+                from .kuwo import fetch_hot_songs
+                items = fetch_hot_songs(20)
+                if not items:
+                    return
+                # 第一步: 立即显示真实热榜 (占位渐变封面 + 排名)
+                rows0 = [(n, a, "") for n, a, _u in items]
+                self._ui_queue.put(lambda: self._apply_hot_rows(rows0))
+                # 第二步: 并行下载封面后刷新 (8 并发, 旧缓存秒出)
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=8) as ex:
+                    covers = list(ex.map(lambda it: self._cache_cover(it[2]),
+                                         items))
+                rows = [(items[i][0], items[i][1], covers[i])
+                        for i in range(len(items))]
+                self._ui_queue.put(lambda: self._apply_hot_rows(rows))
+            except Exception as exc:  # noqa: BLE001
+                print("热榜加载失败(保留静态推荐):", exc)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _cache_cover(self, url):
+        """下载封面到临时目录 %TEMP%/musicplayer_home, 返回本地路径 (失败返回空)。"""
+        import hashlib
+        if not url:
+            return ""
+        try:
+            d = os.path.join(tempfile.gettempdir(), "musicplayer_home")
+            os.makedirs(d, exist_ok=True)
+            fn = hashlib.md5(url.encode("utf-8")).hexdigest() + ".jpg"
+            path = os.path.join(d, fn)
+            if os.path.isfile(path):
+                return path
+            r = requests.get(url, timeout=10)
+            if r.status_code == 200 and r.content:
+                with open(path, "wb") as f:
+                    f.write(r.content)
+                return path
+        except Exception:  # noqa: BLE001
+            pass
+        return ""
+
+    def _apply_hot_rows(self, rows):
+        try:
+            if rows and self.recommend_grid.winfo_exists():
+                self.recommend_grid.set_hot(rows)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _build_ui_popups(self):
         """延后创建悬浮浮层 (队列), 避免拖慢启动; 悬浮时会按需创建。"""

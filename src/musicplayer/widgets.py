@@ -844,8 +844,15 @@ class RecommendGrid(tk.Frame):
         self._photos = []
         self._art = [os.path.join(PICTRUE, "L%d.jpg" % (i + 1))
                      for i in range(len(self.SONGS))]
+        self._hot = None          # 真实热榜: [(歌名, 歌手, 封面本地路径), ...]
         self._drawn = False
         # 不在构造时绘制 (20 张卡片合成较慢), 由主窗口在首帧后调用 draw_deferred
+
+    def set_hot(self, items):
+        """用真实热榜数据替换静态推荐并重绘。items=[(歌名, 歌手, 封面路径), ...]。"""
+        self._hot = list(items)
+        self._drawn = False
+        self._draw()
 
     def refresh(self):
         self._drawn = False
@@ -859,8 +866,8 @@ class RecommendGrid(tk.Frame):
     def _wheel(self, event):
         self.canvas.yview_scroll(_wheel_units(event), "units")
 
-    def _cell(self, art_path, text):
-        """透明卡: 圆角白卡 + 内缩 1:1 封面 + 底部固定歌名区 (无双层圆角打架)。"""
+    def _cell(self, art_path, text, rank=None):
+        """透明卡: 圆角白卡 + 内缩 1:1 封面 + 排名徽标 + 底部歌名区。"""
         w, h = self.CELL_W, self.CELL_H
         pad = 10
         text_h = 34
@@ -879,7 +886,19 @@ class RecommendGrid(tk.Frame):
         ax = cx0 + (cx1 - cx0 - a) // 2
         ay = cy0 + (cy1 - cy0 - a) // 2
         try:
-            art = cover_crop(Image.open(art_path), a, a)
+            if art_path:
+                art = cover_crop(Image.open(art_path), a, a)
+            else:
+                # 无封面: 浅色主题渐变占位
+                art = Image.new("RGB", (a, a), (238, 241, 245))
+                grad = Image.new("RGB", (a, a))
+                for yy in range(a):
+                    t = yy / max(1, a - 1)
+                    c1 = (238, 241, 245)
+                    c2 = (222, 231, 240)
+                    grad.paste(tuple(int(c1[i] + (c2[i] - c1[i]) * t)
+                                     for i in range(3)), (0, yy))
+                art = grad
             mask = Image.new("L", (a, a), 0)
             ImageDraw.Draw(mask).rounded_rectangle([0, 0, a - 1, a - 1],
                                                    radius=cover_radius,
@@ -888,6 +907,17 @@ class RecommendGrid(tk.Frame):
             d = ImageDraw.Draw(img)
         except Exception:  # noqa: BLE001
             pass
+        # 排名徽标 (左上角, 热榜标识)
+        if rank is not None:
+            bw, bh = 30, 22
+            bx, by = ax + 4, ay + 4
+            d.rounded_rectangle([bx, by, bx + bw - 1, by + bh - 1], radius=9,
+                                fill=ACCENT_HEX)
+            bf = _font(12, bold=True)
+            bt = str(rank)
+            btw = int(d.textlength(bt, font=bf))
+            d.text((bx + (bw - btw) // 2, by + (bh - 13) // 2), bt,
+                   font=bf, fill="#FFFFFF")
         # 歌名: 固定文字区, 垂直居中
         f = _font(13, bold=True)
         t = _clip(d, text, f, w - 2 * (pad + 9))
@@ -900,13 +930,22 @@ class RecommendGrid(tk.Frame):
         self.canvas.delete("all")
         self._photos = []
         self._drawn = True
+        if self._hot:
+            items = [(it[0], it[1], (it[2] if len(it) > 2 else ""))
+                     for it in self._hot]
+        else:
+            items = [(name, "", self._art[i])
+                     for i, name in enumerate(self.SONGS)]
         total_h = self.ROWS * self.CELL_H + (self.ROWS - 1) * self.GAP + 30
         pad_x = (self.width - (self.COLS * self.CELL_W + (self.COLS - 1) * self.GAP)) // 2
-        for i, name in enumerate(self.SONGS):
+        for i, it in enumerate(items):
+            name, artist, art = it[0], it[1], it[2]
+            if not art and not self._hot:
+                art = self._art[i % len(self._art)]
             r, c = i // self.COLS, i % self.COLS
             x0 = pad_x + c * (self.CELL_W + self.GAP)
             y0 = 15 + r * (self.CELL_H + self.GAP)
-            photo = self._cell(self._art[i], name)
+            photo = self._cell(art, name, rank=i + 1)
             self._photos.append(photo)
             tag = "cell_%d" % i
             self.canvas.create_image(x0, y0, image=photo, anchor="nw",
