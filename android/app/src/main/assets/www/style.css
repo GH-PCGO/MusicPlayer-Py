@@ -220,6 +220,18 @@ input, select { font-family: inherit; }
 #playerLyrics { flex: 1; min-height: 0; position: relative; margin: 4px 0; }
 #lyricsScroll { position: absolute; inset: 0; overflow: hidden; }
 #lyricsLines { position: absolute; left: 0; right: 0; padding: 0 26px; will-change: transform; }
+/* 中心锚点: 左右两侧短标记 (不压歌词文字) */
+#lyrCenter { position: absolute; left: 0; right: 0; top: 42%; height: 0;
+  pointer-events: none; transition: opacity .15s; opacity: .3; }
+#lyrCenter::before, #lyrCenter::after { content: ""; position: absolute; top: -4px;
+  width: 16px; height: 8px; border-radius: 4px; background: var(--accent); }
+#lyrCenter::before { left: 10px; }
+#lyrCenter::after { right: 10px; }
+#lyrCenter.on { opacity: 1; }
+/* 拖动时间气泡 */
+#lyrBadge { position: absolute; left: 50%; top: calc(42% - 36px); transform: translateX(-50%);
+  display: none; padding: 4px 13px; border-radius: 14px; z-index: 3; pointer-events: none;
+  background: rgba(0,0,0,.74); color: #fff; font-size: 12px; white-space: nowrap; }
 .lyrLine { text-align: center; font-size: 15px; line-height: 1.55;
   padding: 9px 0; color: var(--deep); transition: all .2s ease; }
 .lyrLine.cur { color: var(--accent-txt); font-weight: 800; font-size: 19px; }

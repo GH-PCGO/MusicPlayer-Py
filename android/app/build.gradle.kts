@@ -11,8 +11,8 @@ android {
         applicationId = "com.musicplayer.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 4
-        versionName = "1.3"
+        versionCode = 5
+        versionName = "1.4"
         ndk {
             // 瑕嗙洊缁濆ぇ澶氭暟鐪熸満; 濡傞渶 32 浣嶈€佽澶囧彲鏀圭敤 Python 3.11 + armeabi-v7a
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
@@ -48,4 +48,5 @@ chaquopy {
         }
     }
 }
+
 

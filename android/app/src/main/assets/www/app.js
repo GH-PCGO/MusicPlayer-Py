@@ -19,7 +19,7 @@ const state = {
   theme: "green", br: "320kmp3", mode: 1, volume: 60, muted: false,
   queue: [], idx: -1,
   results: [], resultBase: 0, page: 1, kw: "", hasMore: false, loadingMore: false,
-  lyrics: [], lyrDragging: false, pendingSeek: null, errorCount: 0,
+  lyrics: [], lyrDragging: false, lyrTranslate: null, pendingSeek: null, errorCount: 0,
   page: "home",
 };
 
@@ -623,72 +623,126 @@ function curLyricLine() {
   for (let j = 0; j < state.lyrics.length; j++) { if (state.lyrics[j][0] <= ms) i = j; else break; }
   return i;
 }
+const LYR_CENTER = 0.42;   // 当前/目标行在歌词区的垂直锚点比例
+
 function positionLyrics(line) {
   const lines = $("lyricsLines").children;
   if (!lines.length) return;
-  for (let k = 0; k < lines.length; k++) {
-    lines[k].classList.toggle("cur", k === line);
-    lines[k].classList.toggle("dim", Math.abs(k - line) >= 3);
-  }
+  highlightLyrics(line);
   const cur = lines[line];
   if (cur) {
     const scroll = $("lyricsScroll");
-    const target = cur.offsetTop - scroll.clientHeight * 0.42;
-    $("lyricsLines").style.transform = "translateY(" + (-target) + "px)";
+    const t = -(cur.offsetTop - scroll.clientHeight * LYR_CENTER);
+    state.lyrTranslate = t;
+    $("lyricsLines").style.transform = "translateY(" + t + "px)";
+  }
+}
+function highlightLyrics(line) {
+  const lines = $("lyricsLines").children;
+  for (let k = 0; k < lines.length; k++) {
+    lines[k].classList.toggle("cur", k === line);
+    lines[k].classList.toggle("dim", Math.abs(k - line) >= 3);
   }
 }
 function updateLyrics(ms) {
   if (state.lyrDragging || !state.lyrics.length) return;
   positionLyrics(curLyricLine());
 }
+/** 歌词区内距参考点最近的行 (拖动/点击定位用) */
+function lyricLineAt(refY, translate) {
+  const lines = $("lyricsLines").children;
+  let best = 0, bd = Infinity;
+  for (let i = 0; i < lines.length; i++) {
+    const d = Math.abs((lines[i].offsetTop + lines[i].offsetHeight / 2)
+                       - (refY - translate));
+    if (d < bd) { bd = d; best = i; }
+  }
+  return best;
+}
+function seekToLyricLine(line) {
+  if (!state.lyrics[line]) return;
+  const ms = state.lyrics[line][0];
+  if (audio.src && audio.duration) {
+    audio.currentTime = ms / 1000;
+    setProgress(audio.currentTime, audio.duration);
+    setProgressMini(audio.currentTime);
+    $("pbCur").textContent = fmt(audio.currentTime);
+  } else if (currentTrack()) {
+    state.pendingSeek = ms / 1000;
+    setProgress(state.pendingSeek, audio.duration || 0);
+    $("pbCur").textContent = fmt(state.pendingSeek);
+  }
+  positionLyrics(line);
+}
 
-/* 歌词拖拽 → 预览 + 松手 seek (上下滑动播放) */
+/* 歌词上下滑动调整进度 (主流设计: 跟随手指 + 中心指示线 + 时间气泡 + 松手跳转) */
 (function () {
   const scroll = $("lyricsScroll");
   let drag = null;
+
+  function dragUI(on) {
+    const c = $("lyrCenter"), b = $("lyrBadge");
+    if (c) c.classList.toggle("on", on);
+    if (!b) return;
+    b.style.display = on ? "block" : "none";
+    if (on && drag && state.lyrics[drag.target]) {
+      b.textContent = fmt(state.lyrics[drag.target][0] / 1000) + "  ·  松手跳转";
+    }
+  }
+
   scroll.addEventListener("pointerdown", (e) => {
     if (!state.lyrics.length) return;
     const lines = $("lyricsLines").children;
     if (!lines.length) return;
-    drag = { startY: e.clientY, startLine: curLyricLine(),
-             lineH: lines[0].offsetHeight || 44, moved: false, preview: null };
+    const rect = scroll.getBoundingClientRect();
+    const startTranslate = (state.lyrTranslate != null) ? state.lyrTranslate : 0;
+    drag = {
+      startY: e.clientY,
+      startTranslate: startTranslate,
+      moved: false,
+      target: curLyricLine(),
+      tapped: lyricLineAt(e.clientY - rect.top, startTranslate),
+    };
     state.lyrDragging = true;
+    dragUI(true);
     try { scroll.setPointerCapture(e.pointerId); } catch (err) {}
     e.preventDefault();
   });
+
   scroll.addEventListener("pointermove", (e) => {
     if (!drag) return;
     const dy = e.clientY - drag.startY;
     if (Math.abs(dy) > 4) drag.moved = true;
-    let line = Math.round(drag.startLine - dy / drag.lineH);
-    line = Math.max(0, Math.min(state.lyrics.length - 1, line));
-    drag.preview = line;
-    positionLyrics(line);
+    const t = drag.startTranslate + dy;
+    state.lyrTranslate = t;
+    $("lyricsLines").style.transform = "translateY(" + t + "px)";
+    drag.target = lyricLineAt(scroll.clientHeight * LYR_CENTER, t);
+    highlightLyrics(drag.target);
+    dragUI(true);           // 同步刷新气泡时间
   });
-  function endDrag(e) {
+
+  function endDrag() {
     if (!drag) return;
-    const line = drag.preview != null ? drag.preview : drag.startLine;
-    const wasTap = !drag.moved;
-    state.lyrDragging = false;
+    const moved = drag.moved;
+    const line = moved ? drag.target : drag.tapped;
     drag = null;
-    if (wasTap || line !== curLyricLine()) {
-      const ms = state.lyrics[line][0];
-      if (audio.src && audio.duration) {
-        audio.currentTime = ms / 1000;
-        setProgress(audio.currentTime, audio.duration);
-        setProgressMini(audio.currentTime);
-        $("pbCur").textContent = fmt(audio.currentTime);
-      } else if (currentTrack()) {
-        state.pendingSeek = ms / 1000;
-        setProgress(state.pendingSeek, audio.duration || 0);
-        $("pbCur").textContent = fmt(state.pendingSeek);
-      }
-      updateLyrics(ms);
+    state.lyrDragging = false;
+    state.lyrTranslate = null;
+    dragUI(false);
+    if (moved && line === curLyricLine()) {
+      positionLyrics(line);          // 未跨行, 回到播放位置
+    } else {
+      seekToLyricLine(line);         // 单击行 / 拖到别的行 → 跳转
     }
   }
   scroll.addEventListener("pointerup", endDrag);
   scroll.addEventListener("pointercancel", () => {
-    state.lyrDragging = false; drag = null;
+    if (!drag) return;
+    drag = null;
+    state.lyrDragging = false;
+    state.lyrTranslate = null;
+    dragUI(false);
+    updateLyrics(audio.currentTime * 1000);
   });
 })();
 
