@@ -707,7 +707,13 @@ function seekToLyricLine(line) {
     dragUI(true);
     try { scroll.setPointerCapture(e.pointerId); } catch (err) {}
     e.preventDefault();
+    e.stopPropagation();
   });
+
+  // 兜底: 拖动期间阻止原生滚动/回弹抢走手势 (老 WebView 不支持 touch-action 时)
+  scroll.addEventListener("touchmove", (e) => {
+    if (state.lyrDragging) e.preventDefault();
+  }, { passive: false });
 
   scroll.addEventListener("pointermove", (e) => {
     if (!drag) return;
@@ -736,14 +742,11 @@ function seekToLyricLine(line) {
     }
   }
   scroll.addEventListener("pointerup", endDrag);
-  scroll.addEventListener("pointercancel", () => {
-    if (!drag) return;
-    drag = null;
-    state.lyrDragging = false;
-    state.lyrTranslate = null;
-    dragUI(false);
-    updateLyrics(audio.currentTime * 1000);
-  });
+  // 手势被系统取消时也结算 (按当前预览行跳转), 不再静默丢弃 → 避免"断触后无反应"
+  scroll.addEventListener("pointercancel", endDrag);
+  // 兜底: 万一 setPointerCapture 失败, 手指移出歌词区仍能收尾
+  document.addEventListener("pointerup", () => { if (drag) endDrag(); });
+  document.addEventListener("pointercancel", () => { if (drag) endDrag(); });
 })();
 
 /* ---------------- 事件绑定 ---------------- */

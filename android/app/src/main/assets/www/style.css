@@ -217,8 +217,11 @@ input, select { font-family: inherit; }
 #playerArtist { font-size: 13px; color: var(--deep); margin-top: 4px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-#playerLyrics { flex: 1; min-height: 0; position: relative; margin: 4px 0; }
-#lyricsScroll { position: absolute; inset: 0; overflow: hidden; }
+#playerLyrics { flex: 1; min-height: 0; position: relative; margin: 4px 0;
+  touch-action: none; overscroll-behavior: contain; }
+#lyricsScroll { position: absolute; inset: 0; overflow: hidden;
+  touch-action: none; overscroll-behavior: contain; -webkit-user-select: none;
+  user-select: none; }
 #lyricsLines { position: absolute; left: 0; right: 0; padding: 0 26px; will-change: transform; }
 /* 中心锚点: 左右两侧短标记 (不压歌词文字) */
 #lyrCenter { position: absolute; left: 0; right: 0; top: 42%; height: 0;
