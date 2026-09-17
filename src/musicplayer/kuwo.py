@@ -22,6 +22,9 @@ import requests
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")
+# 酷我 CDN (kw-er.kuwo.cn) 对桌面 UA 返回 403 防盗链, 需用移动/客户端 UA 拉流
+MOBILE_UA = ("Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
+             "(KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36")
 
 SEARCH_URL = ("http://search.kuwo.cn/r.s?all={kw}&ft=music&itemset=web_2013"
               "&client=kt&pn={pn}&rn={rn}&rformat=json&encoding=utf8"
@@ -193,8 +196,10 @@ class KuwoAPI:
         for b in chain:
             try:
                 url = self._mobi_url(rid, b)
+                # CDN 需要移动 UA, 否则 403
                 stream = self._session.get(url, timeout=self.timeout,
-                                           stream=True)
+                                           stream=True,
+                                           headers={"User-Agent": MOBILE_UA})
                 stream.raise_for_status()
                 return stream, b
             except Exception:  # noqa: BLE001
@@ -208,7 +213,8 @@ class KuwoAPI:
     def _anti(self, rid):
         """antiserver 兜底: 返回音频流响应 (仅试听片段)。"""
         url = ANTI_URL.format(rid=rid)
-        resp = self._session.get(url, timeout=self.timeout)
+        resp = self._session.get(url, timeout=self.timeout,
+                                 headers={"User-Agent": MOBILE_UA})
         resp.raise_for_status()
         return resp
 
