@@ -25,20 +25,6 @@ const state = {
 
 let _playSeq = 0;   // 快速切歌时丢弃过期的 play() 结果
 
-const REC_SONGS = ["一路向北", "大风吹", "下辈子不一定还能遇见你", "半生雪", "少年",
-  "潮汐", "烟雨人间", "雾里", "晴天", "奔赴星空",
-  "稻香", "虞兮叹", "青花瓷", "起风了", "难渡",
-  "夜曲", "刺客", "霍元甲", "谪仙", "听妈妈的话"];
-const REC_GRADS = [
-  ["#F97316", "#EF4444"], ["#8B5CF6", "#6366F1"], ["#06B6D4", "#3B82F6"],
-  ["#22C55E", "#16A34A"], ["#EC4899", "#F97316"], ["#0EA5E9", "#6366F1"],
-  ["#EAB308", "#F97316"], ["#14B8A6", "#06B6D4"], ["#F43F5E", "#EC4899"],
-  ["#84CC16", "#22C55E"], ["#64748B", "#334155"], ["#D946EF", "#8B5CF6"],
-  ["#F59E0B", "#EF4444"], ["#3B82F6", "#0EA5E9"], ["#22C55E", "#EAB308"],
-  ["#A855F7", "#EC4899"], ["#0F766E", "#14B8A6"], ["#DC2626", "#F59E0B"],
-  ["#6366F1", "#8B5CF6"], ["#16A34A", "#84CC16"],
-];
-
 const audio = new Audio();
 audio.preload = "none";
 const $ = (id) => document.getElementById(id);
@@ -49,6 +35,7 @@ const ICON_PAUSE = '<svg viewBox="0 0 24 24" width="22" height="22" fill="curren
 const ICON_PREV = '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M6 6h2v12H6zM19 6v12l-9-6z"/></svg>';
 const ICON_NEXT = '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M16 6h2v12h-2zM5 18V6l9 6z"/></svg>';
 const ICON_QUEUE = '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M4 6h16v2H4zM4 11h16v2H4zM4 16h10v2H4z"/></svg>';
+const ICON_PLAY_SM = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
 const ICON_VOL = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3z"/><path d="M15.5 8c1.7 2.3 1.7 5.7 0 8l1.9 1.2c2.3-3.1 2.3-7.3 0-10.4l-1.9 1.2z"/></svg>';
 const ICON_MUTE = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3z"/><path d="M16 8l5 8-1.5 1-5-8z"/></svg>';
 
@@ -95,7 +82,6 @@ function applyTheme(name) {
   const logo = $("logo");
   if (logo) logo.style.color = t.accent;
   state.theme = name;
-  buildRecGrid();   // 推荐卡配色跟随主题
   saveState();
 }
 function buildThemeDots(container, active) {
@@ -206,29 +192,126 @@ function shade(hex, amt) {
   return "#" + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
 }
 
-/* ---------------- 首页 ---------------- */
-function buildRecGrid() {
-  const grid = $("recGrid");
-  if (!grid) return;
-  grid.innerHTML = "";
-  const accent = THEMES[state.theme].accent;
-  REC_SONGS.forEach((name, i) => {
-    const card = document.createElement("div");
-    card.className = "recCard";
-    // 推荐卡用主题色衍生渐变 (与整体配色统一, 不再彩虹撞色)
-    const c1 = shade(accent, 0.42 - (i % 3) * 0.06);
-    const c2 = shade(accent, -0.18);
-    card.innerHTML =
-      '<div class="recCover" style="background:linear-gradient(135deg,' + c1 + ',' + c2 + ')">' +
-      '<div class="name">' + escapeHtml(name) + '</div></div>' +
-      '<div class="recName">' + escapeHtml(name) + '</div>';
-    card.addEventListener("click", () => {
-      $("searchInput").value = name;
-      doSearch(name, 1, false);
-      showPage("search");
-    });
-    grid.appendChild(card);
+/* ---------------- 首页 (真实热榜 + 推荐歌单) ---------------- */
+let _hotSongs = [];
+
+async function loadHome() {
+  const loading = $("homeLoad");
+  if (loading) { loading.style.display = "block"; loading.textContent = "正在加载推荐…"; }
+  // 并行拉取热榜与推荐歌单
+  const [hot, pls] = await Promise.allSettled([
+    fetchJson("/api/hot?limit=20", 20000),
+    fetchJson("/api/playlists?limit=8", 20000),
+  ]);
+  let ok = false;
+  if (hot.status === "fulfilled" && hot.value.items) {
+    _hotSongs = hot.value.items;
+    renderHomeHot(_hotSongs);
+    ok = true;
+  }
+  if (pls.status === "fulfilled" && pls.value.items) {
+    renderHomePlaylists(pls.value.items);
+    ok = true;
+  }
+  if (loading) {
+    loading.style.display = ok ? "none" : "block";
+    if (!ok) loading.textContent = "推荐加载失败，请检查网络后点右上角刷新";
+  }
+}
+
+function renderHomeHot(items) {
+  const box = $("rankList");
+  if (!box) return;
+  box.innerHTML = "";
+  items.forEach((it, i) => {
+    const row = document.createElement("div");
+    row.className = "hotRow";
+    const cover = it.cover
+      ? '<img class="hotCover" src="' + it.cover + '" onerror="this.style.visibility=\'hidden\'">'
+      : '<div class="hotCover"></div>';
+    row.innerHTML =
+      '<span class="hotRank' + (i < 3 ? " top" : "") + '">' + (i + 1) + '</span>' +
+      cover +
+      '<div class="hotInfo"><div class="hotName">' + escapeHtml(it.name) +
+      '</div><div class="hotArtist">' + escapeHtml(it.artist) + '</div></div>' +
+      '<span class="hotPlay">' + ICON_PLAY_SM + '</span>';
+    row.addEventListener("click", () => playByName(it.name, it.artist));
+    box.appendChild(row);
   });
+}
+
+function renderHomePlaylists(items) {
+  const strip = $("plStrip");
+  if (!strip) return;
+  strip.innerHTML = "";
+  items.forEach((p) => {
+    const card = document.createElement("div");
+    card.className = "plCard";
+    const cover = p.cover
+      ? '<img src="' + p.cover + '" onerror="this.style.display=\'none\'">'
+      : "";
+    card.innerHTML =
+      '<div class="plCover">' + cover +
+      '<span class="plCount">&#9654; ' + fmtCount(p.count) + '</span></div>' +
+      '<div class="plName">' + escapeHtml(p.name) + '</div>';
+    card.addEventListener("click", () => openPlaylist(p.id, p.name));
+    strip.appendChild(card);
+  });
+}
+
+function fmtCount(n) {
+  n = n || 0;
+  if (n >= 100000000) return (n / 100000000).toFixed(1) + "亿";
+  if (n >= 10000) return (n / 10000).toFixed(0) + "万";
+  return String(n);
+}
+
+/** 点热歌/搜索结果: 按"歌手 歌名"在酷我搜索并播放第一条 */
+async function playByName(name, artist) {
+  toast("加载中: " + name);
+  try {
+    const kw = artist ? (artist.split(" / ")[0] + " " + name) : name;
+    const data = await fetchJson("/api/search?kw=" + encodeURIComponent(kw) + "&pn=1", 20000);
+    const items = (data.items || []).filter((x) => x && x.rid);
+    if (!items.length) { toast("未找到: " + name); return; }
+    state.results = items;
+    state.resultBase = 0;
+    renderResults(items, false);
+    state.queue = items.slice(0);
+    state.idx = 0;
+    playTrack(state.queue[0], 0);
+    openPlayer();
+  } catch (e) {
+    toast("加载失败，请重试");
+  }
+}
+
+/** 每日推荐: 随机播一首热歌 */
+function playRandomHot() {
+  if (!_hotSongs.length) { toast("推荐加载中…"); return; }
+  const it = _hotSongs[Math.floor(Math.random() * _hotSongs.length)];
+  playByName(it.name, it.artist);
+}
+
+function reloadHome() {
+  loadHome();
+  toast("已刷新推荐");
+}
+
+/** 打开歌单: 拉取歌曲 → 播放第一首, 队列=整个歌单 */
+async function openPlaylist(id, name) {
+  toast("加载歌单: " + name);
+  try {
+    const data = await fetchJson("/api/playlist?id=" + id + "&limit=50", 25000);
+    const items = (data.items || []).filter((x) => x && x.name);
+    if (!items.length) { toast("歌单为空"); return; }
+    // 用结果页展示歌单, 再从酷我匹配播放
+    state.kw = name;
+    const first = items[0];
+    playByName(first.name, first.artist);
+  } catch (e) {
+    toast("歌单加载失败");
+  }
 }
 
 /* ---------------- 搜索 ---------------- */
@@ -738,13 +821,15 @@ function init() {
     goSearch: () => showPage("search"),
     goHome: () => showPage("home"),
     openPlayer: openPlayer,
+    playRandomHot: playRandomHot,
+    reloadHome: reloadHome,
   };
   buildThemeDots($("playerTheme"));
-  buildRecGrid();
   bindEvents();
   restoreState();
   showPage("home");
   setPlayIcons(false);
   updateVolIcon();
+  loadHome();
 }
 document.addEventListener("DOMContentLoaded", init);

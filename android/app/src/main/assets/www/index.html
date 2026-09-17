@@ -18,14 +18,22 @@
     </div>
   </div>
   <div class="homeBody">
-    <div class="banner">
-      <div class="bannerText">
-        <div class="bannerTitle">热门推荐</div>
-        <div class="bannerSub">发现好音乐，点击即搜索</div>
+    <div id="hero" class="hero" onclick="app.playRandomHot()">
+      <div class="heroText">
+        <div class="heroTitle">每日推荐</div>
+        <div class="heroSub">精选热歌 · 点击随机播放</div>
       </div>
+      <button class="heroPlay">&#9654;</button>
       <div class="bannerDisc"></div>
     </div>
-    <div id="recGrid"></div>
+
+    <div class="secHead"><span class="secTitle">推荐歌单</span></div>
+    <div id="plStrip" class="plStrip"></div>
+
+    <div class="secHead"><span class="secTitle">热歌榜</span>
+      <span class="secMore" onclick="app.reloadHome()">刷新</span></div>
+    <div id="rankList" class="hotList"></div>
+    <div id="homeLoad" class="empty">正在加载推荐…</div>
   </div>
 </section>
 

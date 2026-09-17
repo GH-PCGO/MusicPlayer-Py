@@ -21,6 +21,7 @@ if __name__ == "__main__" and not any(
 
 from musicplayer.kuwo import KuwoAPI
 from musicplayer.lyrics import fetch_lyrics, parse_lrc
+from musicplayer import netease
 
 WEB_DIR = None          # 由 MainActivity 通过 set_web_dir() 传入 (解压后的 www 目录)
 _api = KuwoAPI()
@@ -139,6 +140,28 @@ class Handler(BaseHTTPRequestHandler):
                 lines = parse_lrc(lrc) if lrc else []
                 return self._json({"lrc": lrc,
                                    "lines": [list(x) for x in lines]})
+
+            if p == "/api/hot":
+                limit = min(50, max(1, int((q.get("limit") or ["20"])[0])))
+                rows = netease.fetch_hot_songs(limit)
+                return self._json({"items": [
+                    {"name": n, "artist": a, "cover": c} for n, a, c in rows]})
+
+            if p == "/api/playlists":
+                limit = min(20, max(1, int((q.get("limit") or ["6"])[0])))
+                rows = netease.fetch_recommend_playlists(limit)
+                return self._json({"items": [
+                    {"id": i, "name": n, "cover": c, "count": cnt}
+                    for i, n, c, cnt in rows]})
+
+            if p == "/api/playlist":
+                pid = (q.get("id") or [""])[0]
+                if not pid:
+                    return self._json({"error": "no id"}, 400)
+                limit = min(100, max(1, int((q.get("limit") or ["50"])[0])))
+                name, rows = netease.fetch_playlist_songs(pid, limit)
+                return self._json({"name": name, "items": [
+                    {"name": n, "artist": a, "cover": c} for n, a, c in rows]})
 
             return self._json({"error": "not found"}, 404)
         except Exception as exc:  # noqa: BLE001

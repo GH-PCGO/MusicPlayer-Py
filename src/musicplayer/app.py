@@ -379,7 +379,7 @@ class MainWindow:
         """后台抓取网易云热榜: 先显示热榜名(占位封面), 再并行下载封面刷新。"""
         def worker():
             try:
-                from .kuwo import fetch_hot_songs
+                from .netease import fetch_hot_songs
                 items = fetch_hot_songs(20)
                 if not items:
                     return

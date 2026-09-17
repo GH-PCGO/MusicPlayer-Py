@@ -282,32 +282,3 @@ class KuwoAPI:
                     pass
         threading.Thread(target=worker, daemon=True).start()
         return None
-
-
-# ------------------------------------------------------------------ 热榜 (跨源)
-# 网易云官方歌单接口 (无需登录/密钥, 歌词抓取已依赖同一域)
-HOT_PLAYLISTS = {
-    "热歌榜": "3778678",
-    "飙升榜": "19723756",
-    "新歌榜": "3779629",
-}
-
-
-def fetch_hot_songs(limit=20, list_id="3778678"):
-    """网易云热榜 → [(歌名, 歌手, 封面URL), ...] (可跨源, 供首页推荐格用)。"""
-    url = "https://music.163.com/api/playlist/detail?id=%s" % list_id
-    resp = requests.get(url, headers={"User-Agent": UA}, timeout=15)
-    resp.raise_for_status()
-    tracks = (resp.json().get("result") or {}).get("tracks") or []
-    out = []
-    for t in tracks:
-        name = (t.get("name") or "").strip()
-        if not name:
-            continue
-        artists = " / ".join(a.get("name", "") for a in (t.get("artists") or [])
-                             if a.get("name"))
-        pic = (t.get("album") or {}).get("picUrl") or ""
-        out.append((name, artists, pic))
-        if len(out) >= limit:
-            break
-    return out
