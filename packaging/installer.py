@@ -44,6 +44,9 @@ def _payload_dir():
 
 
 def _default_dir():
+    # 默认安装到 D:\Software\MusicPlayer; D 盘不可用时回退用户目录
+    if os.path.isdir("D:\\"):
+        return os.path.join("D:\\", "Software", "MusicPlayer")
     local = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
     return os.path.join(local, "Programs", "MusicPlayer")
 
