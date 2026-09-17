@@ -100,7 +100,9 @@
   <div id="playerHead">
     <button id="playerClose" class="navBtn">&#9660;</button>
     <div id="playerHeadTxt">正在播放</div>
-    <div class="spacer"></div>
+    <button id="playerSettings" class="navBtn" title="设置">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 15.5a3.5 3.5 0 110-7 3.5 3.5 0 010 7zm7.4-2.6l1.9-1.5-1.9-3.3-2.3.9a7.6 7.6 0 00-1.6-.9L15.2 5h-3.9l-.3 2.6c-.6.2-1.1.5-1.6.9l-2.3-.9-1.9 3.3L7 12.9a7.7 7.7 0 000 1.8l-1.9 1.5 1.9 3.3 2.3-.9c.5.4 1 .7 1.6.9l.3 2.6h3.9l.3-2.6c.6-.2 1.1-.5 1.6-.9l2.3.9 1.9-3.3-1.9-1.5c.1-.3.1-.6.1-.9s0-.6-.1-.9z"/></svg>
+    </button>
   </div>
   <div id="playerCoverWrap"><img id="playerCover" src="" alt=""></div>
   <div id="playerInfo">
@@ -120,17 +122,38 @@
       <span id="pbTotal">0:00</span>
     </div>
     <div id="playerBtns">
-      <button id="playerMode" class="pbtn" title="播放模式">&#128257;</button>
+      <button id="playerMode" class="pbtn" title="播放模式">列表</button>
       <button id="playerPrev" class="pbtn big"><svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M6 6h2v12H6zM19 6v12l-9-6z"/></svg></button>
       <button id="playerPlay" class="pbtn play"><svg viewBox="0 0 24 24" width="34" height="34" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>
       <button id="playerNext" class="pbtn big"><svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M16 6h2v12h-2zM5 18V6l9 6z"/></svg></button>
       <button id="playerQueue" class="pbtn" title="播放队列"><svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M4 6h16v2H4zM4 11h16v2H4zM4 16h10v2H4z"/></svg></button>
     </div>
-    <div id="playerVol">
-      <span id="volIcon">&#128266;</span>
+  </div>
+</div>
+
+<!-- ============ 设置面板 (主题色 / 音质 / 音量) ============ -->
+<div id="sheetMask" onclick="app.closeSettings()"></div>
+<div id="settingsSheet">
+  <div class="sheetBar"></div>
+  <div class="sheetHead">
+    <span class="sheetTitle">设置</span>
+    <button id="sheetClose" class="navBtn" onclick="app.closeSettings()">&#10005;</button>
+  </div>
+  <div class="setRow">
+    <div class="setLabel">主题色</div>
+    <div id="themeDots" class="themeDots"></div>
+  </div>
+  <div class="setRow">
+    <div class="setLabel">音质</div>
+    <div id="brSeg" class="seg"></div>
+  </div>
+  <div class="setRow">
+    <div class="setLabel">音量</div>
+    <div class="volWrap">
+      <span id="volIcon"></span>
       <input id="pbVol" type="range" min="0" max="100" value="60">
+      <span id="volPct">60%</span>
     </div>
-    <div id="playerTheme"></div>
   </div>
 </div>
 

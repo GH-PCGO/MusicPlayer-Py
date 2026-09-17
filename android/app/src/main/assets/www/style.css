@@ -52,9 +52,6 @@ input, select { font-family: inherit; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fakeIcon { color: var(--deep); }
 #themeBtns { display: flex; gap: 6px; }
-.themeDot { width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid #fff;
-  box-shadow: 0 0 0 1px var(--border); }
-.themeDot.active { box-shadow: 0 0 0 1.5px var(--accent); }
 
 #searchbox { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px;
   background: var(--bg); border: 1px solid var(--border); border-radius: 20px;
@@ -242,10 +239,13 @@ input, select { font-family: inherit; }
 #lyricsHint { position: absolute; inset: 0; display: none; align-items: center;
   justify-content: center; color: var(--dim); font-size: 14px; }
 
-#playerControls { padding: 6px 18px calc(18px + env(safe-area-inset-bottom)); }
+#playerControls { padding: 6px 18px calc(16px + env(safe-area-inset-bottom)); }
 #playerProgress { display: flex; align-items: center; gap: 8px; }
 #pbCur, #pbTotal { font-size: 11px; color: var(--dim); min-width: 34px; text-align: center; }
 #pbProgress { flex: 1; height: 22px; position: relative; cursor: pointer; }
+#pbProgress::before { content: ""; position: absolute; left: 0; right: 0; top: 50%;
+  height: 4px; transform: translateY(-50%); background: var(--border);
+  border-radius: 2px; }
 #pbProgress .track { position: absolute; top: 50%; left: 0; right: 0; height: 4px;
   transform: translateY(-50%); background: var(--border); border-radius: 2px; }
 #pbFill { position: absolute; top: 50%; left: 0; height: 4px; transform: translateY(-50%);
@@ -261,14 +261,50 @@ input, select { font-family: inherit; }
   color: #fff; box-shadow: 0 6px 18px rgba(0,0,0,.18); }
 #playerMode { font-size: 13px; font-weight: 700; color: var(--deep); }
 
-#playerVol { display: flex; align-items: center; gap: 10px; margin-top: 10px;
-  padding: 0 10px; }
-#volIcon { font-size: 16px; color: var(--deep); }
-#pbVol { flex: 1; accent-color: var(--accent); height: 24px; }
-#playerTheme { margin-top: 6px; display: flex; gap: 10px; justify-content: center; }
+/* ---------------- 设置面板 (底部抽屉) ---------------- */
+#sheetMask { position: fixed; inset: 0; z-index: 70; display: none;
+  background: rgba(15,18,24,.35); }
+#sheetMask.on { display: block; }
+#settingsSheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 71;
+  background: #FCFCFE; border-radius: 20px 20px 0 0; padding: 0 20px
+  calc(20px + env(safe-area-inset-bottom)); transform: translateY(105%);
+  transition: transform .26s cubic-bezier(.22,1,.36,1);
+  box-shadow: 0 -8px 30px rgba(0,0,0,.18); }
+#settingsSheet.on { transform: translateY(0); }
+.sheetBar { width: 40px; height: 4px; border-radius: 2px; background: var(--border);
+  margin: 10px auto 2px; }
+.sheetHead { display: flex; align-items: center; margin-bottom: 6px; }
+.sheetTitle { font-size: 17px; font-weight: 800; flex: 1; }
+.setRow { padding: 14px 0; border-top: 1px solid rgba(0,0,0,.05); }
+.setRow:first-of-type { border-top: 0; }
+.setLabel { font-size: 13px; color: var(--deep); margin-bottom: 12px; }
+
+/* 主题色: 色卡圆点 (选中=自身色环 + 白勾) */
+.themeDots { display: flex; gap: 18px; padding: 4px 2px 6px; }
+.themeDot { width: 34px; height: 34px; border-radius: 50%; border: 0; position: relative;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.06); transition: transform .15s, box-shadow .15s; }
+.themeDot.active { box-shadow: 0 0 0 2.5px var(--card), 0 0 0 4px currentColor; }
+.themeDot.active::after { content: ""; position: absolute; left: 50%; top: 50%;
+  width: 15px; height: 8px; border-left: 3px solid #fff; border-bottom: 3px solid #fff;
+  transform: translate(-50%,-62%) rotate(-45deg); border-radius: 1.5px; }
+
+/* 音质: 分段控件 */
+.seg { display: flex; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 12px; padding: 3px; }
+.seg > button { flex: 1; border: 0; background: transparent; color: var(--deep);
+  font-size: 13px; padding: 9px 0; border-radius: 9px; transition: background .15s; }
+.seg > button.on { background: var(--accent); color: #fff; font-weight: 700; }
+
+/* 音量: 图标 + 粗滑杆 + 百分比 */
+.volWrap { display: flex; align-items: center; gap: 12px; }
+#volIcon { color: var(--deep); display: flex; }
+#volIcon svg { width: 20px; height: 20px; }
+#pbVol { flex: 1; accent-color: var(--accent); height: 26px; }
+#volPct { font-size: 12px; font-weight: 600; color: #4B5563;
+  min-width: 40px; text-align: right; }
 
 /* ---------------- toast ---------------- */
-#toast { position: fixed; left: 50%; bottom: 180px; z-index: 80;
+#toast { position: fixed; left: 50%; bottom: 46%; z-index: 90;
   transform: translateX(-50%); background: rgba(0,0,0,.78); color: #fff;
   padding: 9px 18px; border-radius: 20px; font-size: 13px; opacity: 0;
   pointer-events: none; transition: opacity .2s; max-width: 80%; text-align: center; }

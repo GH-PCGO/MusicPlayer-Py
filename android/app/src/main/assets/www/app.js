@@ -92,9 +92,51 @@ function buildThemeDots(container, active) {
     d.className = "themeDot" + (name === state.theme ? " active" : "");
     d.dataset.name = name;
     d.style.background = THEMES[name].accent;
+    d.style.color = THEMES[name].accent;   // 供选中态 currentColor 色环使用
     d.addEventListener("click", () => applyTheme(name));
     container.appendChild(d);
   });
+}
+
+/* ---------------- 设置面板 ---------------- */
+const BR_OPTIONS = [["320kmp3", "320k"], ["192kmp3", "192k"], ["128kmp3", "128k"]];
+
+function buildBrSeg() {
+  const box = $("brSeg");
+  if (!box) return;
+  box.innerHTML = "";
+  BR_OPTIONS.forEach(([val, label]) => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.classList.toggle("on", state.br === val);
+    b.addEventListener("click", () => setQuality(val));
+    box.appendChild(b);
+  });
+  const sel = $("brSelect");
+  if (sel) sel.value = state.br;
+}
+
+function setQuality(br) {
+  state.br = br;
+  buildBrSeg();
+  const label = (BR_OPTIONS.find((o) => o[0] === br) || [, br])[1];
+  toast("音质已切换为 " + label);
+  saveState();
+}
+
+function openSettings() {
+  const s = $("settingsSheet"), m = $("sheetMask");
+  if (s) s.classList.add("on");
+  if (m) m.classList.add("on");
+}
+function closeSettings() {
+  const s = $("settingsSheet"), m = $("sheetMask");
+  if (s) s.classList.remove("on");
+  if (m) m.classList.remove("on");
+}
+function updateVolPct() {
+  const el = $("volPct");
+  if (el) el.textContent = Math.round(state.volume) + "%";
 }
 
 /* ---------------- 页面切换 ---------------- */
@@ -161,9 +203,10 @@ function restoreState() {
   if (Array.isArray(s.queue)) state.queue = s.queue;
   if (typeof s.idx === "number") state.idx = s.idx;
   applyTheme(state.theme);
-  buildThemeDots($("playerTheme"));
-  $("brSelect").value = state.br;
+  buildThemeDots($("themeDots"));
+  buildBrSeg();
   $("pbVol").value = state.volume;
+  updateVolPct();
   audio.volume = state.volume / 100;
   if (typeof s.muted === "boolean") {
     audio.muted = s.muted;
@@ -778,18 +821,15 @@ function bindEvents() {
     });
     hot.appendChild(c);
   });
-  // 音质
-  $("brSelect").addEventListener("change", (e) => {
-    state.br = e.target.value;
-    toast("音质已切换为 " + e.target.options[e.target.selectedIndex].text);
-    saveState();
-  });
+  // 音质 (搜索页下拉 与 设置面板分段控件 双向同步)
+  $("brSelect").addEventListener("change", (e) => setQuality(e.target.value));
   // 播放条
   $("pbPlay").addEventListener("click", (e) => { e.stopPropagation(); togglePlay(); });
   $("pbPrev").addEventListener("click", (e) => { e.stopPropagation(); prevNext(-1); });
   $("pbNext").addEventListener("click", (e) => { e.stopPropagation(); prevNext(1); });
   // 播放器
   $("playerClose").addEventListener("click", closePlayer);
+  $("playerSettings").addEventListener("click", openSettings);
   $("playerPlay").addEventListener("click", togglePlay);
   $("playerPrev").addEventListener("click", () => prevNext(-1));
   $("playerNext").addEventListener("click", () => prevNext(1));
@@ -805,6 +845,7 @@ function bindEvents() {
   $("pbVol").addEventListener("input", (e) => {
     state.volume = parseInt(e.target.value, 10);
     audio.volume = state.volume / 100;
+    updateVolPct();
     updateVolIcon();
     saveState();
   });
@@ -880,13 +921,18 @@ function init() {
     openPlayer: openPlayer,
     playRandomHot: playRandomHot,
     reloadHome: reloadHome,
+    openSettings: openSettings,
+    closeSettings: closeSettings,
   };
-  buildThemeDots($("playerTheme"));
+  buildThemeDots($("themeDots"));
+  buildBrSeg();
   bindEvents();
   restoreState();
+  setModeUI();          // 始终刷新模式按钮文字 (无存档时也要)
   showPage("home");
   setPlayIcons(false);
   updateVolIcon();
+  updateVolPct();
   loadHome();
 }
 document.addEventListener("DOMContentLoaded", init);
