@@ -218,9 +218,9 @@ class KuwoAPI:
         resp.raise_for_status()
         return resp
 
-def download(self, rid, filename, folder, on_done=None,
-                 on_progress=None, title="", artist="", cover=None,
-                 br="320kmp3"):
+    def download(self, rid, filename, folder, on_done=None,
+                     on_progress=None, title="", artist="", cover=None,
+                     br="320kmp3"):
         """下载完整 mp3 到 folder, 支持回调 (线程中执行)。文件名保持《歌名》.mp3。
 
         on_done(path):   完成回调 (失败时 path=None)。
