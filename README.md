@@ -132,6 +132,7 @@ python packaging/build.py
 
 ## 改动记录
 
+- **手机访问（iPhone / 局域网）**：`src/musicplayer/webapp.py` 共享 HTTP 服务（纯标准库，搜索/在线播放/歌词/热榜歌单/**下载到本地库**/本地音乐 Range 206 播放），安卓 `server.py` 改为薄包装复用；移动端网页唯一源迁到 `src/musicplayer/assets/www/`。新增 `run_iphone.py`、`musicplayer-web` 入口、`packaging/MusicPlayer_macos.spec` + `build_macos.sh`（macOS .app 含 pygame/mutagen）。**macOS 应用**右上角 ☎ 按钮弹出「手机访问」窗口：状态/地址/**二维码（segno）**/一键开启停止/复制链接/浏览器打开/「随应用启动自动开启」（写 `settings.json` 的 `mobile_auto`/`mobile_port`），退出应用自动 `webapp.stop()` 释放端口。
 - **下载接口修复**：酷我官方封死旧链路后，下载/播放切换至 `mobi.s` 车载签名接口（`convert_url_with_sign`），320k 优先、128k 回落，恢复完整全曲下载（原 antiserver 仅返回 ~11s 试听）。见「接口说明」。
 - **清理死代码**：移除了已失效的 `www.kuwo.cn/url` csrf 下载分支。
 - **窗口拖拽修复**：背景标签（`_bg_label`）原先盖住面板吃掉鼠标事件导致无法拖动，现已把拖拽绑定同时挂到背景标签上。
@@ -225,6 +226,51 @@ gradle :app:assembleDebug
 
 `app/build.gradle.kts` 里 `buildPython()` 指向本机 Python 3.11；ABI 覆盖 `arm64-v8a` + `armeabi-v7a`（Python 3.11 才支持 32 位）。装到手机：`adb install -r app-debug.apk`，或用文件管理器直接安装（需允许“安装未知来源应用”）。
 
+安卓端 `server.py` 已改为复用共享后端 `musicplayer.webapp`（纯标准库 HTTP 服务，接口不变）；
+服务器与移动端网页的唯一来源现在是 `src/musicplayer/webapp.py` + `src/musicplayer/assets/www/`，
+改动后需同步到 `android/app/src/main/assets/www/`：
+`cp src/musicplayer/assets/www/* android/app/src/main/assets/www/`
+
+## iPhone / 局域网访问（Web 版）
+
+桌面版的同时也在手机上用：让 iPhone 与电脑连同一 Wi-Fi，在电脑上启动共享 Web 服务，
+iPhone 用 Safari 打开打印出的地址即可 **搜索 / 在线播放 / 歌词 / 下载到电脑本地库 / 管理本地音乐**：
+
+```bash
+# 方式 1: 直接跑 (输出地址后手机打开)
+python run_iphone.py
+
+# 方式 2: 安装了包后
+musicplayer-web
+
+# 方式 3 (推荐): 用打包好的 macOS 应用, 右上角 ☎ 一键开启, 见下节
+
+# 端口可通过环境变量改 (默认 8000)
+MUSICPLAYER_PORT=9000 python run_iphone.py
+```
+
+- 服务绑定 `0.0.0.0`，启动时打印电脑局域网 IP（`http://192.168.x.x:8000/`）；
+- 下载会写入桌面版的**同一下载目录**（源码运行时为项目根 `music/`，打包版为 `~/MusicPlayer/music/`），文件带封面与歌词；
+- 本地播放支持 HTTP Range（`206`），iPhone 上可自由拖动进度条；
+- 若想把歌曲存到 iPhone 自身：iOS Safari 在网页播放条点 **… → 下载（片）** 存为 mp3。
+
+### macOS 应用内一键开启手机访问
+
+`MusicPlayer.app` 右上角新增 **☎ 手机访问** 按钮，点击弹出窗口：
+
+- 显示手机访问地址与**二维码**（iPhone 直接扫码打开），可一键**复制链接** / **在浏览器打开**；
+- **开启 / 停止**开关实时生效；勾选「启动应用时自动开启手机访问」会写进
+  `settings.json`，下次打开 Mac 应用即自动起服务；
+- 手机下载的歌曲写入与桌面版**同一**下载目录（打包版为 `~/MusicPlayer/music/`），
+  含封面与歌词。安装时若勾选自动开启、第一次启动会弹出「允许传入连接」防火墙询问，
+  允许即可。
+
+### 打包为 macOS 应用
+
+```bash
+bash packaging/build_macos.sh        # 产物: dist/MusicPlayer.app (含 pygame/mutagen)
+```
+
 ### 本地调试 Web 界面（不开安卓）
 
 ```bash
@@ -234,6 +280,6 @@ python android/app/src/main/python/server.py
 
 ### 与桌面版的差异
 
-- 界面为移动端网页（无 Tkinter），下载/本地音乐列表暂未实现（后续迭代）。
-- 播放用 `<audio>` 直接拉取酷我签名直链；进度/seek/音量/切歌由 JS 处理。
+- 界面为移动端网页（无 Tkinter）；下载 / 本地音乐库 / 删除已在「我的」页实现（写桌面同一下载目录）。
+- 播放用 `<audio>` 直接拉取酷我签名直链（本地曲目走 `/api/audio` Range 流）；进度/seek/音量/切歌由 JS 处理。
 - 会话（主题/音质/音量/模式/队列/进度）存在 WebView `localStorage`，启动恢复为暂停态。

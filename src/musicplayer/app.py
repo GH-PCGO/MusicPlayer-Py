@@ -31,6 +31,7 @@ from .widgets import PICTRUE, load_image, BgLabel, \
 from .engine import default_engine, MciEngine, open_path
 from . import dialogs
 from . import widgets
+from . import webapp
 from .util import split_artists
 from .paths import SETTINGS_PATH, ASSETS_DIR
 from .lyrics import parse_lrc, read_uslt, read_cover, fetch_lyrics, save_lrc
@@ -322,6 +323,9 @@ class MainWindow:
         self._pb_muted = False
         self._pb_vol_prev = 50
         self._settings_path = SETTINGS_PATH
+        self.mobile_dialog = None     # 手机访问对话框 (单例)
+        self.mobile_auto = False      # 启动应用时随启手机访问服务
+        self._mobile_port = 8000      # 手机访问服务请求端口
         self._cover_by_title = {}   # 歌名(显示名) → 封面 URL (搜索结果)
         self._cover_cache = {}      # 封面 URL → 已缓存 PhotoImage
         self._dl_br = "320kmp3"     # 下载/在线播放音质 (320kmp3/192kmp3/128kmp3)
@@ -344,6 +348,13 @@ class MainWindow:
         self._build_ui()
         self._load_settings()   # 恢复模式/音量/静音 (不自动播放)
         self._bind_shortcuts()
+
+        # 自动开启手机访问服务 (settings.json 中 mobile_auto=true)
+        if getattr(self, "mobile_auto", False):
+            try:
+                webapp.start(getattr(self, "_mobile_port", 8000), host="0.0.0.0")
+            except Exception:  # noqa: BLE001
+                pass
 
         # 启动线程读取下载目录歌曲 (避免影响打开速度)
         threading.Thread(target=self._load_download_dir, daemon=True).start()
@@ -758,25 +769,29 @@ class MainWindow:
         self._br_var.set(self._BR_LABELS[key])
 
     def _build_top_right(self):
-        """右上角 4 个圆角图标按钮 (设置/下载/最小化/关闭)。"""
-        x0 = 812
+        """右上角 5 个圆角图标按钮 (手机访问/设置/下载/最小化/关闭)。"""
+        x0 = 772
         y0 = 14
-        btn = _CircleBtn(self.root, "\u2699", self.on_settings,
-                         size=32, fill="#FFFFFF", active="#EEF0F3",
-                         fg="#5A6472", bg="#F7F8FA", font=symbol_font(13))
+        btn = _CircleBtn(self.root, "\u260E", self.open_mobile_access,
+                         size=32, fill="#FFFFFF", active="#EDFBF1",
+                         fg="#1DB954", bg="#F7F8FA", font=symbol_font(13))
         btn.place(x=x0, y=y0, width=32, height=32)
-        btn2 = _CircleBtn(self.root, "\u2B07", self.show_download_panel,
+        btn2 = _CircleBtn(self.root, "\u2699", self.on_settings,
                           size=32, fill="#FFFFFF", active="#EEF0F3",
                           fg="#5A6472", bg="#F7F8FA", font=symbol_font(13))
         btn2.place(x=x0 + 40, y=y0, width=32, height=32)
-        btn3 = _CircleBtn(self.root, "\u2013", self.minimize,
+        btn3 = _CircleBtn(self.root, "\u2B07", self.show_download_panel,
                           size=32, fill="#FFFFFF", active="#EEF0F3",
                           fg="#5A6472", bg="#F7F8FA", font=symbol_font(13))
         btn3.place(x=x0 + 80, y=y0, width=32, height=32)
-        btn4 = _CircleBtn(self.root, "\u00D7", self.exit_app,
+        btn4 = _CircleBtn(self.root, "\u2013", self.minimize,
+                          size=32, fill="#FFFFFF", active="#EEF0F3",
+                          fg="#5A6472", bg="#F7F8FA", font=symbol_font(13))
+        btn4.place(x=x0 + 120, y=y0, width=32, height=32)
+        btn5 = _CircleBtn(self.root, "\u00D7", self.exit_app,
                           size=32, fill="#FFFFFF", active="#FDE8E9",
                           fg="#E5484D", bg="#F7F8FA", font=symbol_font(14))
-        btn4.place(x=x0 + 120, y=y0, width=32, height=32)
+        btn5.place(x=x0 + 160, y=y0, width=32, height=32)
 
     # ------------------------------- 底部播放条 (浅色)
     def _build_playbar(self):
@@ -1947,6 +1962,11 @@ class MainWindow:
             if br in ("320kmp3", "192kmp3", "128kmp3"):
                 self._dl_br = br
                 self._set_br_ui()
+            self.mobile_auto = bool(s.get("mobile_auto", False))
+            try:
+                self._mobile_port = int(s.get("mobile_port", 8000))
+            except Exception:  # noqa: BLE001
+                self._mobile_port = 8000
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -2041,6 +2061,8 @@ class MainWindow:
                     "volume": int(self._pb_vol_val),
                     "muted": bool(self._pb_muted),
                     "br": self._dl_br,
+                    "mobile_auto": bool(self.mobile_auto),
+                    "mobile_port": int(getattr(self, "_mobile_port", 8000)),
                     "track": track,
                     "pos": float(self._pb_pos) if track else 0.0,
                     "playlist": list(self._pb_playlist),
@@ -2113,7 +2135,7 @@ class MainWindow:
                          command=lambda: messagebox.showinfo(
                              "反馈", "仅作学习交流使用，请支持正版音乐。"))
         try:
-            x = self.root.winfo_rootx() + 812
+            x = self.root.winfo_rootx() + 772
             y = self.root.winfo_rooty() + 46
             menu.tk_popup(x, y)
         finally:
@@ -2137,6 +2159,37 @@ class MainWindow:
 
     def open_storage_dialog(self):
         dialogs.StorageDialog(self.root)
+
+    # ============================================================== 手机访问
+    def open_mobile_access(self):
+        """右上角 ☎ 按钮: 打开手机访问窗口 (单例)。"""
+        if (self.mobile_dialog is not None
+                and self.mobile_dialog.winfo_exists()):
+            self.mobile_dialog.lift()
+            return
+        self.mobile_dialog = dialogs.MobileAccessDialog(self.root, self)
+
+    def mobile_running(self):
+        return webapp.is_running()
+
+    def mobile_url(self):
+        ip = webapp.lan_ip()
+        port = webapp.current_port() or getattr(self, "_mobile_port", 8000)
+        return "http://%s:%d/" % (ip, port)
+
+    def mobile_toggle(self):
+        """开↔停手机访问服务 (绑定 0.0.0.0 供局域网)。"""
+        if webapp.is_running():
+            webapp.stop()
+            return True
+        port = webapp.start(getattr(self, "_mobile_port", 8000),
+                            host="0.0.0.0")
+        self._mobile_port = port   # 记住实际端口 (端口被占用时 start 会 +1)
+        return True
+
+    def mobile_set_auto(self, on):
+        self.mobile_auto = bool(on)
+        self._save_settings()
 
     def _toggle_lyrics(self):
         """切换歌词面板显示/隐藏。"""
@@ -2232,6 +2285,7 @@ class MainWindow:
 
     def exit_app(self):
         self._save_settings()
+        webapp.stop()   # 关闭手机访问服务释放端口
         if self.tray_icon is not None and self.tray_active:
             try:
                 self.tray_icon.stop()

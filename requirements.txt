@@ -1,6 +1,11 @@
 # 跨平台音乐播放器依赖
-pillow>=9.0       # 封面/背景图处理
-requests>=2.28    # 酷我/歌词接口
+pillow>=9.0       # 封面/背景图处理 (Web/iPhone 模式也必需)
+requests>=2.28    # 酷我/歌词/网易云接口 (Web/iPhone 模式必需)
 pygame>=2.3       # 跨平台音频引擎 (macOS/Linux 必装; Windows 可选, 缺失自动回退 winmm MCI)
-mutagen>=1.46     # MP3 时长/标签读取 (可选; 缺失时用内置纯 Python ID3/帧解析回退)
+mutagen>=1.46     # MP3 时长/标签读取 (可选; Web 模式装上可显示本地曲目时长)
 pystray>=0.19     # 系统托盘 (可选)
+segno>=1.6        # 手机访问窗口二维码 (可选; 纯 Python)
+
+# --- Web/iPhone 模式 (共享服务器, 纯标准库 + 上面前三项) ---
+#   python -m musicplayer.webapp   或   python run_iphone.py
+#   绑定 0.0.0.0:8000, iPhone Safari 访问 http://<电脑局域网IP>:8000/

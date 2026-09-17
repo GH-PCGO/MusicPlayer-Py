@@ -6,12 +6,14 @@
 - 换肤缩略图等比 cover 裁切 (不拉伸畸变) + 圆角白卡
 - 全部使用 ttk 控件, 跟随统一主题
 """
+import io
 import os
 import queue
 import sys
 import threading
 import tkinter as tk
 import tkinter.ttk as ttk
+import webbrowser
 from tkinter import filedialog, messagebox
 
 from PIL import Image, ImageDraw
@@ -175,6 +177,156 @@ class StorageDialog(tk.Toplevel):
             global DOWNLOAD_DIR
             DOWNLOAD_DIR = folder
             self._set_dir(folder)
+
+
+class MobileAccessDialog(tk.Toplevel):
+    """手机访问窗口: 一键开启/停止局域网 Web 服务, 显示地址 + 二维码。
+
+    扫码 (或复制地址) 用 iPhone/安卓 Safari 打开, 搜索/在线播放/下载/管理
+    本地音乐。需选择「随应用启动自动开启」时窗口关闭后仍会透传给主窗口记忆。
+    """
+
+    W, H = 480, 440
+    CLR_ON = "#1DB954"
+    CLR_OFF = "#9AA1AD"
+
+    def __init__(self, master, app):
+        super().__init__(master)
+        self.app = app
+        self.title("手机访问")
+        self.geometry("%dx%d" % (self.W, self.H))
+        self.resizable(False, False)
+        self.configure(bg="#FFFFFF")
+
+        tk.Label(self, text="手机访问（iPhone / 局域网）",
+                 font=(FONT_FAMILY, 18, "bold"), bg="#FFFFFF",
+                 fg="#1F2430").place(x=24, y=20)
+
+        # 卡片: 状态 / 地址 / 二维码 / 提示
+        card = tk.Frame(self, bg="#F7F8FA", highlightthickness=1,
+                        highlightbackground="#E7E9EE")
+        card.place(x=24, y=66, width=432, height=190)
+
+        self._status_off = "未开启"
+        self._status_on = "已开启"
+        self.status_dot = tk.Label(card, text="\u25CF", font=(FONT_FAMILY, 14),
+                                   bg="#F7F8FA", fg=self.CLR_OFF)
+        self.status_dot.place(x=20, y=20)
+        self.status_label = tk.Label(card, text="未开启", font=(FONT_FAMILY, 13, "bold"),
+                                     bg="#F7F8FA", fg="#5A6472")
+        self.status_label.place(x=42, y=22)
+
+        self.url_label = tk.Label(card, text="", font=(FONT_FAMILY, 15, "bold"),
+                                  bg="#F7F8FA", fg="#1F2430", anchor="w",
+                                  justify="left", cursor="text")
+        self.url_label.place(x=20, y=66, width=250, height=30)
+
+        self.hint_label = tk.Label(card, text="手机和电脑需连同一 Wi-Fi，用 Safari 打开",
+                                   font=(FONT_FAMILY, 10), bg="#F7F8FA",
+                                   fg="#8A94A3", anchor="w", wraplength=250,
+                                   justify="left")
+        self.hint_label.place(x=20, y=104, width=250, height=60)
+
+        # 二维码
+        self.qr_label = tk.Label(card, bg="#FFFFFF", highlightthickness=1,
+                                 highlightbackground="#E7E9EE")
+        self.qr_label.place(x=296, y=22, width=124, height=124)
+        self._qr_photo = None
+
+        # 按钮行
+        self.btn_toggle = ttk.Button(self, text="开启", style="Accent.TButton",
+                                     command=self._toggle, cursor="hand2")
+        self.btn_toggle.place(x=24, y=276, width=110, height=36)
+        ttk.Button(self, text="复制链接", command=self._copy,
+                   cursor="hand2").place(x=146, y=276, width=92, height=36)
+        ttk.Button(self, text="在浏览器打开", command=self._open_browser,
+                   cursor="hand2").place(x=250, y=276, width=118, height=36)
+
+        # 反馈提示 (复制/错误)
+        self.fb_label = tk.Label(self, text="", font=(FONT_FAMILY, 10),
+                                 bg="#FFFFFF", fg=ACCENT_DK_HEX)
+        self.fb_label.place(x=24, y=320, width=260, height=20)
+
+        # 随应用启动
+        self.auto_var = tk.IntVar(value=1 if app.mobile_auto else 0)
+        ttk.Checkbutton(self, text="启动应用时自动开启手机访问",
+                        variable=self.auto_var,
+                        command=self._on_auto_change,
+                        takefocus=False).place(x=24, y=352)
+
+        self.center()
+        self._refresh()
+
+    def center(self):
+        _center_over(self, self.W, self.H, self.master)
+
+    # ------------------------------------------------------------ 状态
+    def _url(self):
+        return self.app.mobile_url()
+
+    def _running(self):
+        return self.app.mobile_running()
+
+    def _refresh(self):
+        running = self._running()
+        self.status_dot.configure(fg=self.CLR_ON if running else self.CLR_OFF)
+        self.status_label.configure(text=self._status_on if running
+                                    else self._status_off,
+                                    fg="#1F2430" if running else "#5A6472")
+        url = self._url()
+        self.url_label.configure(text=url)
+        self.btn_toggle.configure(text="停止" if running else "开启")
+        self._set_qr(url)
+        self.auto_var.set(1 if self.app.mobile_auto else 0)
+
+    def _set_qr(self, url):
+        self._qr_photo = None
+        try:
+            import segno
+            qr = segno.make(url, error="m")
+            buf = io.BytesIO()
+            qr.save(buf, kind="png", scale=4, border=1,
+                    dark="#111827", light="#FFFFFF")
+            buf.seek(0)
+            from PIL import Image
+            self._qr_photo = to_photo(Image.open(buf).convert("RGB"))
+            self.qr_label.configure(image=self._qr_photo)
+        except Exception:  # noqa: BLE001  (无 segno 或渲染失败 → 隐藏二维码区)
+            self._qr_photo = None
+            self.qr_label.configure(image="", text="")
+
+    # ------------------------------------------------------------ 交互
+    def _toggle(self):
+        try:
+            changed = self.app.mobile_toggle()
+            if changed:
+                self._flash("已开启，可扫描或复制地址" if self._running()
+                            else "已停止")
+            self._refresh()
+        except Exception as exc:  # noqa: BLE001
+            self._flash("启动失败: %s" % exc)
+
+    def _copy(self):
+        url = self._url()
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(url)
+            self._flash("已复制到剪贴板")
+        except Exception:  # noqa: BLE001
+            self._flash("复制失败，请手动输入地址")
+
+    def _open_browser(self):
+        try:
+            webbrowser.open(self._url())
+        except Exception:  # noqa: BLE001
+            self._flash("打开失败")
+
+    def _on_auto_change(self):
+        self.app.mobile_set_auto(bool(self.auto_var.get()))
+
+    def _flash(self, text):
+        self.fb_label.configure(text=text)
+        self.after(3000, lambda: self.fb_label.configure(text=""))
 
 
 class LocalScanDialog(tk.Toplevel):

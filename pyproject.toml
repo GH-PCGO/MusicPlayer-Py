@@ -25,9 +25,11 @@ dependencies = [
 audio = ["pygame>=2.3"]     # 跨平台播放引擎 (Windows 缺省回退 winmm MCI)
 tray = ["pystray>=0.19"]    # 系统托盘
 meta = ["mutagen>=1.46"]    # 更精确的时长/标签 (缺失时用内置纯 Python 解析)
+web = ["segno>=1.6"]        # 手机访问窗口的二维码 (纯 Python, 无额外依赖)
 
 [project.scripts]
 musicplayer = "musicplayer.app:main"
+musicplayer-web = "musicplayer.webapp:main"   # iPhone/局域网 Web 服务
 
 [project.urls]
 Homepage = "https://github.com/GH-PCGO/MusicPlayer-Py"
@@ -39,4 +41,5 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-musicplayer = ["assets/Pictrue/*"]
+musicplayer = ["assets/Pictrue/*", "assets/www/*.html", "assets/www/*.js",
+               "assets/www/*.css"]
