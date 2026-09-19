@@ -17,10 +17,19 @@ if __name__ == "__main__" and not any(
     sys.path.insert(0, os.path.join(_root, "src"))
 
 import musicplayer.webapp as webapp  # noqa: E402
+from musicplayer import androidstorage  # noqa: E402
 
 
 def set_web_dir(path):
     webapp.set_web_dir(path)
+
+
+def set_android_storage(context, rel="Music/音乐下载器"):
+    """MainActivity 注入 Android Context, 下载完成后发布到系统媒体库。
+
+    桌面调试时 context 可为 None → androidstorage 自动降级为 no-op。
+    """
+    androidstorage.set_context(context, rel)
 
 
 def start(port=8760):

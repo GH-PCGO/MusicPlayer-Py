@@ -125,6 +125,10 @@
     <div id="playerTitle"></div>
     <div id="playerArtist"></div>
   </div>
+  <div id="playerActs">
+    <button id="playerDl" class="pactBtn" title="下载">&#8595; 下载</button>
+    <button id="playerMv" class="pactBtn" title="观看MV">&#9654; MV</button>
+  </div>
   <div id="playerLyrics">
     <div id="lyrCenter"></div>
     <div id="lyricsScroll"><div id="lyricsLines"></div></div>
@@ -171,6 +175,20 @@
       <span id="volPct">60%</span>
     </div>
   </div>
+</div>
+
+<!-- ============ MV 播放层 (网易云 <video> / B站 iframe) ============ -->
+<div id="mvOverlay" style="display:none">
+  <div id="mvHead">
+    <button id="mvClose" class="navBtn" title="关闭">&#10005;</button>
+    <div id="mvTitle"></div>
+    <button id="mvMore" class="linkBtn" title="更多MV">换一个</button>
+  </div>
+  <div id="mvStage">
+    <video id="mvVideo" controls playsinline webkit-playsinline></video>
+    <iframe id="mvFrame" allowfullscreen allow="autoplay; fullscreen"></iframe>
+  </div>
+  <div id="mvList"></div>
 </div>
 
 <div id="toast"></div>

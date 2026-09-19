@@ -132,6 +132,11 @@ python packaging/build.py
 
 ## 改动记录
 
+- **安卓 v2.0 歌曲「下载 + 观看MV」**：
+  - 每条歌曲（首页热歌榜 / 搜索结果 / 播放队列 / 我的下载 / 全屏播放器）行尾并排两个图标按钮「⬇ 下载 + ▶ MV」（`www` 前端 `actionBtns`，首页热歌无 rid 时由 `webapp._resolve_rid` 按「歌手 歌名」现解析）。
+  - **下载入系统媒体库**：新增 `androidstorage.py`，用 Chaquopy `java` 桥经 `ContentResolver` 把下载好的 mp3 (`IS_PENDING=1 → 拷贝 → IS_PENDING=0`) 发布到 `Music/音乐下载器/`，文件管理器 / 系统音乐 App 可见；采用「私有副本 + 媒体库发布」，删除时两边同删。免存储权限。桌面/iPhone 无 java 桥时自动降级为仅私有目录。因 `MediaStore.RELATIVE_PATH/IS_PENDING` 要求，`minSdk` 24 → **29**。
+  - **观看MV 双源**：新增 `bilibili.py`（先访问 `www.bilibili.com` 取 `buvid3` cookie + Referer 规避风控，再 `search/type` 拿 `bvid`，`player.bilibili.com` iframe 内嵌播放）；`netease.py` 新增 MV 搜索（`type=1004`）与 MV 详情直链（`api/mv/detail` 的 `brs` 240/480/720/1080，`<video>` 播放，签名短时效故每次现取）。新接口 `/api/mv/search`、`/api/mv/url`、`/api/mv/embed`。点 MV 直接播最佳匹配，MV 全屏层自适应横竖屏（竖屏 16:9 居中黑边、横屏铺满，`100dvh` + 安全区）。
+  - `/api/download` 支持无 `rid`（服务端解析）与 `br` 音质；`MainActivity` 注入 Context（`set_android_storage`），`server.py` 转发。
 - **手机访问（iPhone / 局域网）**：`src/musicplayer/webapp.py` 共享 HTTP 服务（纯标准库，搜索/在线播放/歌词/热榜歌单/**下载到本地库**/本地音乐 Range 206 播放），安卓 `server.py` 改为薄包装复用；移动端网页唯一源迁到 `src/musicplayer/assets/www/`。新增 `run_iphone.py`、`musicplayer-web` 入口、`packaging/MusicPlayer_macos.spec` + `build_macos.sh`（macOS .app 含 pygame/mutagen）。**macOS 应用**右上角 ☎ 按钮弹出「手机访问」窗口：状态/地址/**二维码（segno）**/一键开启停止/复制链接/浏览器打开/「随应用启动自动开启」（写 `settings.json` 的 `mobile_auto`/`mobile_port`），退出应用自动 `webapp.stop()` 释放端口。
 - **下载接口修复**：酷我官方封死旧链路后，下载/播放切换至 `mobi.s` 车载签名接口（`convert_url_with_sign`），320k 优先、128k 回落，恢复完整全曲下载（原 antiserver 仅返回 ~11s 试听）。见「接口说明」。
 - **清理死代码**：移除了已失效的 `www.kuwo.cn/url` csrf 下载分支。
@@ -207,6 +212,8 @@ python packaging/build.py
 ## 安卓版本（WebView + Chaquopy 混合）
 
 `android/` 目录是一个独立的 Android Gradle 工程：**Chaquopy** 把桌面版纯 Python 逻辑（`src/musicplayer` 的 `kuwo.py`/`lyrics.py`/`paths.py`/`util.py`）打进 APK 并运行一个本地 HTTP 服务（`android/app/src/main/python/server.py`，纯标准库 `http.server`），界面是 WebView 里加载的移动端网页（`android/app/src/main/assets/www/`，HTML/CSS/JS，`<audio>` 直接播放在线直链）。第一版覆盖：搜索 / 在线播放 / 歌词同步 / 播放队列 / 主题色 / 音质选择 / 会话记忆（暂停恢复，不自动播放）。
+
+**v2.0 新增**：所有歌曲列表行尾「⬇ 下载 + ▶ MV」；下载完成后自动复制一份进系统媒体库 `Music/音乐下载器/`（文件管理器 / 系统音乐 App 可见，`minSdk` 提升到 **29**）；「观看MV」双源（网易云官方 MV 直链 `<video>` + B站搜索内嵌 `player.bilibili.com`），全屏播放层自适应横竖屏。详见「改动记录」。
 
 界面参照主流音乐 App（QQ 音乐 / 网易云风格）：
 - **底部导航**（首页 / 搜索 / 队列）+ 首页推荐 Banner 与 3 列推荐卡；

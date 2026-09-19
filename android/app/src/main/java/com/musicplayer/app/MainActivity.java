@@ -31,6 +31,11 @@ public class MainActivity extends Activity {
         File www = copyAssetsToFiles("www");
         py.getModule("server").callAttr("set_web_dir", www.getAbsolutePath());
 
+        // 2.5) 注入 Context: 下载完成后把 mp3 发布到系统媒体库
+        //      Music/音乐下载器/ (免存储权限; 桌面环境无此调用会自动降级)
+        py.getModule("server").callAttr("set_android_storage", this,
+                                        "Music/音乐下载器");
+
         // 3) 启动本地 HTTP 服务 (127.0.0.1), 返回实际端口
         PyObject portObj = py.getModule("server").callAttr("start", 8760);
         int port = portObj.toInt();

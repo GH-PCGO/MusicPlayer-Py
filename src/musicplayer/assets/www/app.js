@@ -22,6 +22,7 @@ const state = {
   lyrics: [], lyrDragging: false, lyrTranslate: null, pendingSeek: null, errorCount: 0,
   history: [], lastPlayAt: 0,
   downloads: [], _dlTimer: null,
+  mvList: [], mvIndex: 0,
   page: "home",
 };
 
@@ -40,6 +41,8 @@ const ICON_QUEUE = '<svg viewBox="0 0 24 24" width="22" height="22" fill="curren
 const ICON_PLAY_SM = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
 const ICON_VOL = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3z"/><path d="M15.5 8c1.7 2.3 1.7 5.7 0 8l1.9 1.2c2.3-3.1 2.3-7.3 0-10.4l-1.9 1.2z"/></svg>';
 const ICON_MUTE = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3z"/><path d="M16 8l5 8-1.5 1-5-8z"/></svg>';
+const ICON_DL = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M11 3h2v9.6l3.3-3.3 1.4 1.4L12 16.4 6.3 10.7l1.4-1.4L11 12.6V3zM5 18h14v2H5z"/></svg>';
+const ICON_MV = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 5h16a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V6a1 1 0 011-1zm1 2v10h14V7H5zm5 2l5 3-5 3V9z"/></svg>';
 
 /* ---------------- 工具 ---------------- */
 function toast(msg, ms) {
@@ -66,7 +69,7 @@ function fmt(t) {
 }
 async function postJson(url, body) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 15000);
+  const timer = setTimeout(() => ctrl.abort(), 30000);
   try {
     const resp = await fetch(url, {
       method: "POST",
@@ -93,6 +96,28 @@ function escapeHtml(s) {
   return String(s || "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
+}
+/* 行尾图标按钮: 下载 ⬇ + 观看MV ▶ (主流音乐 App 做法) */
+function actionBtns(item, opts) {
+  opts = opts || {};
+  let html = "";
+  if (opts.download !== false && item && !item.local) {
+    html += '<button class="rowBtn dlBtn" title="下载">' + ICON_DL + '</button>';
+  }
+  if (opts.mv !== false && item && item.name) {
+    html += '<button class="rowBtn mvBtn" title="观看MV">' + ICON_MV + '</button>';
+  }
+  return html;
+}
+function bindRowActions(row, item) {
+  const dl = row.querySelector(".dlBtn");
+  if (dl) dl.addEventListener("click", (e) => {
+    e.stopPropagation(); downloadTrack(item);
+  });
+  const mv = row.querySelector(".mvBtn");
+  if (mv) mv.addEventListener("click", (e) => {
+    e.stopPropagation(); watchMv(item);
+  });
 }
 
 /* ---------------- 主题 ---------------- */
@@ -192,6 +217,10 @@ function showPage(name) {
 // 安卓返回键: 播放器开着先收起; 否则只在确实换了页面条目时才渲染,
 // 避免 closePlayer 内部 history.back() 触发的 popstate 把当前页面覆盖掉
 window.addEventListener("popstate", () => {
+  if ($("mvOverlay").style.display !== "none") {
+    hideMvOverlay();               // MV 层最上层: 返回键先收起
+    return;
+  }
   if ($("player").style.display !== "none") {
     $("player").style.display = "none";
     return;
@@ -305,8 +334,9 @@ function renderHomeHot(items) {
       cover +
       '<div class="hotInfo"><div class="hotName">' + escapeHtml(it.name) +
       '</div><div class="hotArtist">' + escapeHtml(it.artist) + '</div></div>' +
-      '<span class="hotPlay">' + ICON_PLAY_SM + '</span>';
+      '<div class="hotActions">' + actionBtns(it) + '</div>';
     row.addEventListener("click", () => playByName(it.name, it.artist));
+    bindRowActions(row, it);
     box.appendChild(row);
   });
 }
@@ -427,16 +457,13 @@ function renderResults(items, append) {
       '<span class="idx">' + (idx + 1) + '</span>' + cover +
       '<div class="rInfo"><div class="rName">' + escapeHtml(item.name) +
       '</div><div class="rArtist">' + escapeHtml(item.artist) + '</div></div>' +
-      '<button class="dlBtn" title="下载">\u2B07</button>' +
+      actionBtns(item) +
       '<button class="addBtn">+</button>';
     row.addEventListener("click", () => playFromResults(idx));
+    bindRowActions(row, item);
     row.querySelector(".addBtn").addEventListener("click", (e) => {
       e.stopPropagation();
       addToQueue(item);
-    });
-    row.querySelector(".dlBtn").addEventListener("click", (e) => {
-      e.stopPropagation();
-      downloadTrack(item);
     });
     list.appendChild(row);
   });
@@ -476,11 +503,13 @@ function renderQueuePage() {
     row.className = "qRow" + (i === state.idx ? " cur" : "");
     row.innerHTML = '<span class="qn">' + (i + 1) + '</span>' +
       '<span class="qt">' + escapeHtml(t.name) + '</span>' +
-      (i === state.idx ? '<span class="qmark">\u25B6</span>' : "");
+      (i === state.idx ? '<span class="qmark">\u25B6</span>' : "") +
+      actionBtns(t);
     row.addEventListener("click", () => {
       if (i === state.idx) togglePlay();
       else { pushHistory(state.idx); playTrack(state.queue[i], i); }
     });
+    bindRowActions(row, t);
     list.appendChild(row);
   });
 }
@@ -495,15 +524,17 @@ function clearQueue() {
 
 /* ---------------- 我的下载 / 本地音乐库 ---------------- */
 async function downloadTrack(track) {
-  if (!track || !track.rid) { toast("暂不支持下载该歌曲"); return; }
-  toast("开始下载: " + (track.name || ""));
+  if (!track || !track.name) { toast("暂不支持下载该歌曲"); return; }
+  if (track.local) { toast("该歌曲已在本地"); return; }
+  toast("开始下载: " + track.name);
   try {
+    // 首页热歌等无 rid 时由服务端按「歌手 歌名」现解析
     const res = await postJson("/api/download", {
-      rid: track.rid, title: track.name, artist: track.artist || "",
-      cover: track.cover || "",
+      rid: track.rid || "", title: track.name, artist: track.artist || "",
+      cover: track.cover || "", br: state.br,
     });
     if (res && res.ok) {
-      toast("已加入下载队列");
+      toast("已开始下载，完成后可在“我的”查看");
       refreshDownloads();
     } else {
       toast((res && res.error) || "下载失败");
@@ -564,14 +595,17 @@ function renderDownloads() {
     } else {
       right = '<button class="dDel" title="删除">\u2715</button>';
     }
+    const disp = dlDisplayName(it.name);
     row.innerHTML = '<span class="idx">' + (i + 1) + '</span>' +
       '<div class="rInfo"><div class="rName">' +
-      escapeHtml(dlDisplayName(it.name)) +
-      '</div><div class="rArtist">' + meta + '</div></div>' + right;
+      escapeHtml(disp) +
+      '</div><div class="rArtist">' + meta + '</div></div>' +
+      actionBtns({ name: disp }, { download: false }) + right;
     row.addEventListener("click", () => {
       if (it.status === "downloading" || it.status === "failed") return;
       playLocal(it.name);
     });
+    bindRowActions(row, { name: disp });
     const del = row.querySelector(".dDel");
     if (del) {
       del.addEventListener("click", (e) => {
@@ -609,6 +643,106 @@ async function deleteLocal(name, rowEl) {
   } catch (e) {
     toast("删除失败");
   }
+}
+
+/* ---------------- 观看 MV (网易云 <video> / B站 iframe) ---------------- */
+async function watchMv(item) {
+  if (!item || !item.name) return;
+  const title = /\.mp3$/i.test(item.name) ? dlDisplayName(item.name) : item.name;
+  const kw = (item.artist ? item.artist.split(" / ")[0] + " " : "") + title;
+  toast("正在获取 MV…");
+  try {
+    const data = await fetchJson(
+      "/api/mv/search?kw=" + encodeURIComponent(kw) + "&limit=8", 25000);
+    const items = (data.items || []).filter((x) => x && (x.bvid || x.id));
+    if (!items.length) { toast("未找到该歌曲的 MV"); return; }
+    state.mvList = items;
+    state.mvIndex = 0;
+    openMvOverlay();
+  } catch (e) {
+    toast("MV 获取失败");
+  }
+}
+function openMvOverlay() {
+  const mv = state.mvList[state.mvIndex];
+  if (!mv) return;
+  setMvTitle(mv);
+  playMv(mv);
+  $("mvList").classList.remove("on");
+  $("mvOverlay").style.display = "flex";
+  renderMvCandidates();
+  history.pushState({ page: "mv" }, "");
+}
+function setMvTitle(mv) {
+  $("mvTitle").textContent = mv.name + (mv.artist ? "  ·  " + mv.artist : "");
+}
+function playMv(mv) {
+  const video = $("mvVideo"), frame = $("mvFrame");
+  if (!mv) return;
+  if (mv.source === "netease") {
+    // 网易云: 详情接口取签名 mp4 直链 (短时效, 每次现取), 用 <video> 播
+    frame.style.display = "none";
+    frame.removeAttribute("src");
+    video.style.display = "";
+    video.removeAttribute("src");
+    fetchJson("/api/mv/url?id=" + mv.id, 25000).then((d) => {
+      if (!d || !d.url) { toast("该 MV 暂不可播放"); return; }
+      video.src = d.url;
+      const p = video.play();
+      if (p && p.catch) p.catch(() => {});
+    }).catch(() => toast("MV 解析失败"));
+  } else {
+    // B站: 内嵌官方播放器 iframe
+    try { video.pause(); } catch (e) {}
+    video.style.display = "none";
+    video.removeAttribute("src");
+    frame.style.display = "";
+    frame.src = "/api/mv/embed?bvid=" + mv.bvid;
+  }
+}
+function renderMvCandidates() {
+  const box = $("mvList");
+  box.innerHTML = "";
+  const items = state.mvList || [];
+  box.classList.toggle("on", items.length > 1);
+  items.forEach((mv, i) => {
+    const row = document.createElement("div");
+    row.className = "mvItem" + (i === state.mvIndex ? " cur" : "");
+    const isNt = mv.source === "netease";
+    const tag = isNt ? "网易云" : "B站";
+    const tagCls = isNt ? "nt" : "bili";
+    const cover = mv.cover
+      ? '<img class="miCover" src="' + mv.cover + '" onerror="this.style.visibility=\'hidden\'">'
+      : '<div class="miCover"></div>';
+    let sub = escapeHtml(mv.artist || "");
+    if (mv.play) sub += (sub ? " · " : "") + fmtCount(mv.play) + "次播放";
+    row.innerHTML = cover +
+      '<div class="miInfo"><div class="miName">' + escapeHtml(mv.name) +
+      '</div><div class="miSub">' + sub + '</div></div>' +
+      '<span class="miTag ' + tagCls + '">' + tag + '</span>';
+    row.addEventListener("click", () => {
+      state.mvIndex = i;
+      setMvTitle(mv);
+      renderMvCandidates();
+      playMv(mv);
+    });
+    box.appendChild(row);
+  });
+}
+function toggleMvList() {
+  $("mvList").classList.toggle("on");
+}
+function hideMvOverlay() {
+  const video = $("mvVideo"), frame = $("mvFrame");
+  try { video.pause(); } catch (e) {}
+  video.removeAttribute("src");
+  frame.removeAttribute("src");
+  $("mvOverlay").style.display = "none";
+  $("mvList").classList.remove("on");
+}
+function closeMvOverlay() {
+  hideMvOverlay();
+  if (history.state && history.state.page === "mv") history.back();
 }
 
 /* ---------------- 播放 ---------------- */
@@ -1030,6 +1164,21 @@ function bindEvents() {
   $("playerNext").addEventListener("click", () => prevNext(1));
   $("playerMode").addEventListener("click", cycleMode);
   $("playerQueue").addEventListener("click", () => { closePlayer(); showPage("queue"); });
+  // 播放器: 下载 / 观看MV
+  $("playerDl").addEventListener("click", () => {
+    const t = currentTrack();
+    if (!t) return;
+    if (t.local) { toast("该歌曲已在本地"); return; }
+    downloadTrack(t);
+  });
+  $("playerMv").addEventListener("click", () => {
+    const t = currentTrack();
+    if (!t) return;
+    watchMv(t.local ? { name: dlDisplayName(t.name), artist: "" } : t);
+  });
+  // MV 播放层
+  $("mvClose").addEventListener("click", closeMvOverlay);
+  $("mvMore").addEventListener("click", toggleMvList);
   $("qpClear").addEventListener("click", clearQueue);
   // 音量
   $("volIcon").addEventListener("click", () => {
@@ -1120,6 +1269,8 @@ function init() {
     openSettings: openSettings,
     closeSettings: closeSettings,
     downloadTrack: downloadTrack,
+    watchMv: watchMv,
+    closeMvOverlay: closeMvOverlay,
     refreshDownloads: refreshDownloads,
     playLocal: playLocal,
     deleteLocal: deleteLocal,

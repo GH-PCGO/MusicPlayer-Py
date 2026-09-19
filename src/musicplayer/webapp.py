@@ -15,12 +15,15 @@
   GET  /api/stream?rid=&br=  在线播放直链 (mobi.s 签名)
   GET  /api/lyrics           歌词 (LRC 原文 + 解析行)
   GET  /api/hot ✓  GET /api/playlists ✓  GET /api/playlist  网易云推荐
+  GET  /api/mv/search?kw=    MV 搜索 (网易云 + B站 合并)
+  GET  /api/mv/url?id=       网易云 MV 直链 mp4 (短时效, 现取)
+  GET  /api/mv/embed?bvid=   B站 MV 内嵌播放地址
   GET  /api/library          本地下载的音乐库
   GET  /api/downloads        下载状态/进度/文件列表
   POST /api/download         开始下载到本地音乐库 (自动嵌歌词/封面)
   GET  /api/audio?name=      播放本地音乐 (支持 Range 拖动进度)
   GET  /api/audio_cover?name= 本地音乐内嵌封面
-  DELETE /api/download?name= 删除本地音乐 (含同名 .lrc)
+  DELETE /api/download?name= 删除本地音乐 (含同名 .lrc; 安卓同步删媒体库)
 """
 import json
 import mimetypes
@@ -34,6 +37,8 @@ from urllib.parse import parse_qs, urlparse
 
 from musicplayer.kuwo import KuwoAPI
 from musicplayer.lyrics import fetch_lyrics, parse_lrc, read_cover
+from musicplayer import androidstorage
+from musicplayer import bilibili
 from musicplayer import netease
 from musicplayer import paths
 
@@ -41,6 +46,8 @@ WEB_DIR = os.path.join(paths.ASSETS_DIR, "www")   # 默认包内前端, 可通�
 _api = KuwoAPI()
 _dl_lock = threading.Lock()
 _dl_state = {}        # 文件名 → {"status": downloading/done/failed, "mb": 进度MB}
+_mv_lock = threading.Lock()
+_mv_cache = {}        # 关键词 → (时间戳, [MV 候选])  60s 缓存, 省去重复搜索
 _SERVER = None        # 当前运行中的 ThreadingHTTPServer (start() 记录 / stop() 关闭)
 _SERVER_LOCK = threading.Lock()
 
@@ -122,9 +129,58 @@ def _scan_library():
     return items
 
 
-def _start_download(rid, title, artist, cover):
-    """后台线程下载到本地音乐库; 名称统一《歌名》.mp3。"""
-    name = KuwoAPI.display_name("<r>《%s》 <a>" % (title or "未知"))
+def _resolve_rid(title, artist):
+    """无 rid 时按「歌手 歌名」在酷我搜索解析 rid (首页热歌只有歌名/歌手)。"""
+    title = (title or "").strip()
+    if not title:
+        return ""
+    artist = (artist or "").split(" / ")[0].strip()
+    kw = (artist + " " + title) if artist else title
+    try:
+        items = _api.search(kw, page=1)
+    except Exception:  # noqa: BLE001
+        return ""
+    return str(items[0][0]) if items else ""
+
+
+def _search_mv(kw, limit=8):
+    """并发搜索网易云 + B站 MV, 合并返回; 结果缓存 60s。"""
+    kw = (kw or "").strip()
+    if not kw:
+        return []
+    now = time.time()
+    with _mv_lock:
+        hit = _mv_cache.get(kw)
+        if hit and now - hit[0] < 60:
+            return hit[1]
+    out = []
+
+    def collect(fn):
+        try:
+            out.extend(fn())
+        except Exception:  # noqa: BLE001
+            pass
+
+    threads = [
+        threading.Thread(target=collect,
+                         args=(lambda: netease.search_mv(kw, limit),)),
+        threading.Thread(target=collect,
+                         args=(lambda: bilibili.search_mv(kw, limit),)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(20)
+    with _mv_lock:
+        _mv_cache[kw] = (now, out)
+    return out
+
+
+def _start_download(rid, title, artist, cover, br="320kmp3"):
+    """后台线程下载到本地音乐库; 名称统一《歌名》.mp3。
+
+    完成后 (安卓) 另存一份到系统媒体库 Music/音乐下载器/。
+    """
     display = "《%s》.mp3" % (title or "未知")
     full = os.path.join(paths.DOWNLOAD_DIR, display)
 
@@ -141,12 +197,16 @@ def _start_download(rid, title, artist, cover):
         _api.download(rid, display, paths.DOWNLOAD_DIR,
                       on_done=lambda p: _finish_download(display, p is not None),
                       on_progress=on_progress,
-                      title=title or "", artist=artist or "", cover=cover or "")
+                      title=title or "", artist=artist or "",
+                      cover=cover or "", br=br)
 
     def _finish_download(disp, ok):
         with _dl_lock:
             _dl_state[disp] = {"status": "done" if ok else "failed",
                                "mb": 0.0}
+        if ok:
+            # 私有目录已含歌词/封面; 再发布一份到系统媒体库 (无桥时 no-op)
+            androidstorage.publish(full, disp)
 
     threading.Thread(target=worker, daemon=True).start()
     return display
@@ -327,6 +387,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"name": name, "items": [
                     {"name": n, "artist": a, "cover": c} for n, a, c in rows]})
 
+            if p == "/api/mv/search":
+                kw = (q.get("kw") or [""])[0].strip()
+                limit = min(15, max(1, int((q.get("limit") or ["8"])[0])))
+                if not kw:
+                    return self._json({"items": []})
+                return self._json({"items": _search_mv(kw, limit)})
+
+            if p == "/api/mv/url":
+                mid = (q.get("id") or [""])[0]
+                if not mid:
+                    return self._json({"error": "no id"}, 400)
+                return self._json(netease.mv_play_url(mid))
+
+            if p == "/api/mv/embed":
+                bvid = (q.get("bvid") or [""])[0]
+                if not bvid:
+                    return self._json({"error": "no bvid"}, 400)
+                return self._json({"url": bilibili.embed_url(bvid)})
+
             if p == "/api/library":
                 return self._json({"items": _scan_library(),
                                    "folder": paths.DOWNLOAD_DIR})
@@ -392,13 +471,19 @@ class Handler(BaseHTTPRequestHandler):
                 data = json.loads(self.rfile.read(n).decode("utf-8"))
             except Exception:  # noqa: BLE001
                 return self._json({"error": "bad json"}, 400)
+            title = data.get("title", "")
+            artist = data.get("artist", "")
             rid = str(data.get("rid") or "").strip()
             if not rid:
-                return self._json({"error": "no rid"}, 400)
+                rid = _resolve_rid(title, artist)   # 首页热歌等无 rid 时现解析
+            if not rid:
+                return self._json({"error": "未找到可下载的音源"}, 404)
+            br = data.get("br") or "320kmp3"
+            if br not in _QUALITY_CHAINS:
+                br = "320kmp3"
             os.makedirs(paths.DOWNLOAD_DIR, exist_ok=True)
-            display = _start_download(rid, data.get("title", ""),
-                                      data.get("artist", ""),
-                                      data.get("cover", ""))
+            display = _start_download(rid, title, artist,
+                                      data.get("cover", ""), br=br)
             return self._json({"name": display, "ok": True})
         except Exception as exc:  # noqa: BLE001
             return self._json({"error": str(exc)}, 500)
@@ -428,6 +513,7 @@ class Handler(BaseHTTPRequestHandler):
                     except OSError:
                         pass
             _dl_state.pop(name, None)
+            androidstorage.delete(name)      # 安卓: 同步删媒体库条目
             return self._json({"ok": True, "removed": removed})
         except Exception as exc:  # noqa: BLE001
             return self._json({"error": str(exc)}, 500)
