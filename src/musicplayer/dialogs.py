@@ -16,49 +16,11 @@ import tkinter.ttk as ttk
 import webbrowser
 from tkinter import filedialog, messagebox
 
-from PIL import Image, ImageDraw
+from PIL import Image
 
-from .widgets import PICTRUE, MAIN_BG, SEARCH_BG, FONT_FAMILY, load_image, \
-    to_photo, cover_crop, ACCENT_HEX, ACCENT_DK_HEX, ACCENT_TXT_HEX, \
-    ACCENT_SOFT_HEX
+from .widgets import FONT_FAMILY, to_photo, ACCENT_HEX, \
+    ACCENT_DK_HEX, ACCENT_TXT_HEX, ACCENT_SOFT_HEX
 from .paths import DOWNLOAD_DIR
-
-# 换肤窗口里的 5 个选择 (与原 ChangeBackground.java 坐标/尺寸一致):
-#   b1 (40,60) b2 (300,60) b3 (40,540) b4 (300,540) b5 (600,60), 均 220x330
-BG_CHOICES = [
-    ("background1.jpg", 40, 60),
-    ("background2.jpg", 300, 60),
-    ("background3.jpg", 40, 540),
-    ("logo.jpg", 300, 540),
-    ("background5.jpg", 600, 60),
-]
-
-
-def _dimmed(path, w, h, alpha=70):
-    """背景图 cover 铺底 + 深色遮罩, 让前景不乱。"""
-    cov = cover_crop(Image.open(path), w, h).convert("RGBA")
-    mask = Image.new("RGBA", (w, h), (15, 18, 24, alpha))
-    return to_photo(Image.alpha_composite(cov, mask))
-
-
-def _thumb(path, w, h, margin=6, radius=8):
-    """等比 cover 缩略图 + 圆角白卡 + 浅投影 (不拉伸畸变)。"""
-    img = Image.open(path).convert("RGB")
-    art = cover_crop(img, w - 2 * margin, h - 2 * margin)
-    art_mask = Image.new("L", art.size, 0)
-    ImageDraw.Draw(art_mask).rounded_rectangle([0, 0, art.size[0] - 1,
-                                                art.size[1] - 1],
-                                               radius=radius, fill=255)
-    card = Image.new("RGBA", (w, h), (255, 255, 255, 255))
-    card.paste(art, (margin, margin), art_mask)
-    box_w, box_h = w + 10, h + 10
-    out = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
-    d = ImageDraw.Draw(out)
-    d.rounded_rectangle([5, 7, 5 + w - 1, 7 + h - 1], radius=14,
-                        fill=(20, 26, 38, 45))
-    out.alpha_composite(card, (5, 5))
-    return to_photo(out)
-
 
 def _center_over(win, w, h, master=None):
     """把窗口居中到 master (主窗口) 之上; 无 master 时居中屏幕, 并防跑出屏。"""

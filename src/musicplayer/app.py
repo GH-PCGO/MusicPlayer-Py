@@ -25,7 +25,7 @@ from PIL import Image
 from .kuwo import KuwoAPI
 import requests
 from .widgets import PICTRUE, load_image, BgLabel, \
-    ImagePanel, Carousel, RecommendGrid, ImageCheckList, ImageList, \
+    ImagePanel, RecommendGrid, ImageCheckList, ImageList, \
     apply_tk_theme, LyricsPanel, ProgressBar, BORDER_HEX, \
     round_cover_photo, placeholder_cover, to_photo
 from .engine import default_engine, MciEngine, open_path

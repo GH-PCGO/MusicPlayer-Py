@@ -21,8 +21,6 @@ from PIL import Image, ImageDraw, ImageFont
 from .paths import PICTRUE
 
 # 共享主题背景 (对应原 MyMusicPanel.path / SearchPanel.path)
-MAIN_BG = os.path.join(PICTRUE, "logo.jpg")
-SEARCH_BG = os.path.join(PICTRUE, "logo.jpg")
 
 # 全局字号 (macOS 苹方 / Windows 微软雅黑)
 FONT_FAMILY = "PingFang SC" if sys.platform == "darwin" else "微软雅黑"
@@ -496,39 +494,6 @@ class ImagePanel(tk.Frame):
 
     def _redraw(self):
         pass
-
-
-class Carousel(tk.Frame):
-    """轮播图面板, 3 秒换一张, 等价于 SlidePanel (url1->url2->url3 循环)。"""
-
-    def __init__(self, master, width=800, height=200, interval=3000, **kw):
-        super().__init__(master, **kw)
-        self.width, self.height = width, height
-        self.interval = interval
-        self._images = [
-            os.path.join(PICTRUE, "url1.jpg"),
-            os.path.join(PICTRUE, "url2.jpg"),
-            os.path.join(PICTRUE, "url3.jpg"),
-        ]
-        self._index = 0
-        self._label = tk.Label(self)
-        self._label.place(x=0, y=0, relwidth=1, relheight=1)
-        self._draw()
-
-    def _draw(self):
-        name = self._images[self._index % len(self._images)]
-        self._index += 1
-        try:
-            self._label.configure(image=load_image(name, self.width, self.height))
-            self._label.image = self._label.cget("image")
-        except Exception:  # noqa: BLE001
-            pass
-
-    def start(self):
-        def tick():
-            self._draw()
-            self._label.after(self.interval, tick)
-        self._label.after(self.interval, tick)
 
 
 # ============================================================== 滚动列表
