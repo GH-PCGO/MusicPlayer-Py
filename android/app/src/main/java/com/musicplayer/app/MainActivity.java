@@ -1,9 +1,11 @@
 package com.musicplayer.app;
 
 import android.app.Activity;
+import android.content.pm.ActivityInfo;
 import android.os.Bundle;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -60,7 +62,7 @@ public class MainActivity extends Activity {
         s.setJavaScriptCanOpenWindowsAutomatically(true);
         webView.setWebViewClient(new WebViewClient());
 
-        // 视频全屏支持 (网易云 <video> 与 B 站内嵌播放器的全屏按钮都靠它)
+        // 视频全屏支持: 进入时切横屏 + 沉浸式, 退出时还原
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onShowCustomView(View view,
@@ -76,28 +78,17 @@ public class MainActivity extends Activity {
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT));
                 webView.setVisibility(View.GONE);
+                enterLandscapeFullscreen(view);
             }
 
             @Override
             public void onHideCustomView() {
-                if (fullView == null) {
-                    return;
-                }
-                root.removeView(fullView);
-                fullView = null;
-                webView.setVisibility(View.VISIBLE);
-                if (fullCallback != null) {
-                    try {
-                        fullCallback.onCustomViewHidden();
-                    } catch (Exception ignored) {
-                    }
-                    fullCallback = null;
-                }
+                exitFullscreenView();
             }
 
             @Override
             public void onPermissionRequest(PermissionRequest request) {
-                request.grant(request.getResources());   // 媒体权限直接放行
+                request.grant(request.getResources());
             }
         });
 
@@ -107,6 +98,41 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
         webView.loadUrl("http://127.0.0.1:" + port + "/");
+    }
+
+    /** 进入横屏全屏: 强制横屏 + 隐藏状态栏/导航栏 (沉浸式)。 */
+    @SuppressWarnings("deprecation")
+    private void enterLandscapeFullscreen(View view) {
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        view.setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+    }
+
+    /** 退出全屏: 移除全屏视图 + 还原竖屏 + 恢复状态栏。 */
+    @SuppressWarnings("deprecation")
+    private void exitFullscreenView() {
+        if (fullView == null) {
+            return;
+        }
+        root.removeView(fullView);
+        fullView = null;
+        webView.setVisibility(View.VISIBLE);
+        webView.setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        if (fullCallback != null) {
+            try {
+                fullCallback.onCustomViewHidden();
+            } catch (Exception ignored) {
+            }
+            fullCallback = null;
+        }
     }
 
     private File copyAssetsToFiles(String dir) {
@@ -140,27 +166,11 @@ public class MainActivity extends Activity {
         return out;
     }
 
-    private void exitFullscreen() {
-        if (fullView == null) {
-            return;
-        }
-        root.removeView(fullView);
-        fullView = null;
-        webView.setVisibility(View.VISIBLE);
-        if (fullCallback != null) {
-            try {
-                fullCallback.onCustomViewHidden();
-            } catch (Exception ignored) {
-            }
-            fullCallback = null;
-        }
-    }
-
     @Override
     public void onBackPressed() {
         // 视频全屏时, 返回键先退出全屏
         if (fullView != null) {
-            exitFullscreen();
+            exitFullscreenView();
             return;
         }
         if (webView != null && webView.canGoBack()) {

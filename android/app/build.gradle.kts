@@ -11,8 +11,8 @@ android {
         applicationId = "com.musicplayer.app"
         minSdk = 29          // MediaStore RELATIVE_PATH/IS_PENDING 需要 API 29+
         targetSdk = 34
-        versionCode = 11
-        versionName = "2.0"
+        versionCode = 12
+        versionName = "2.1"
         ndk {
             // 瑕嗙洊缁濆ぇ澶氭暟鐪熸満; 濡傞渶 32 浣嶈€佽澶囧彲鏀圭敤 Python 3.11 + armeabi-v7a
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
@@ -57,6 +57,7 @@ chaquopy {
         }
     }
 }
+
 
 
 
