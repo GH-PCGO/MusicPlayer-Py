@@ -239,7 +239,9 @@ input, select { font-family: inherit; }
 #lyricsScroll { position: absolute; inset: 0; overflow: hidden;
   touch-action: none; overscroll-behavior: contain; -webkit-user-select: none;
   user-select: none; }
-#lyricsLines { position: absolute; left: 0; right: 0; padding: 0 26px; will-change: transform; }
+#lyricsLines { position: absolute; left: 0; right: 0; padding: 0 26px;
+  will-change: transform; transition: transform .42s cubic-bezier(.22,.61,.36,1); }
+#lyricsLines.dragging { transition: none; }   /* 拖动时直接跟手, 不要动画 */
 /* 中心锚点: 左右两侧短标记 (不压歌词文字) */
 #lyrCenter { position: absolute; left: 0; right: 0; top: 42%; height: 0;
   pointer-events: none; transition: opacity .15s; opacity: .3; }
@@ -252,9 +254,13 @@ input, select { font-family: inherit; }
 #lyrBadge { position: absolute; left: 50%; top: calc(42% - 36px); transform: translateX(-50%);
   display: none; padding: 4px 13px; border-radius: 14px; z-index: 3; pointer-events: none;
   background: rgba(0,0,0,.74); color: #fff; font-size: 12px; white-space: nowrap; }
-.lyrLine { text-align: center; font-size: 15px; line-height: 1.55;
-  padding: 9px 0; color: var(--deep); transition: all .2s ease; }
-.lyrLine.cur { color: var(--accent-txt); font-weight: 800; font-size: 19px; }
+/* 每行固定高度 → offsetTop 稳定, 切换行不会回弹; 当前行用 scale 放大(不影响布局) */
+.lyrLine { text-align: center; font-size: 16px; line-height: 46px; height: 46px;
+  color: var(--deep); transition: color .3s ease, opacity .3s ease,
+  transform .42s cubic-bezier(.22,.61,.36,1); transform: scale(1);
+  transform-origin: center center; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.lyrLine.cur { color: var(--accent-txt); font-weight: 800; transform: scale(1.2); }
 .lyrLine.dim { color: var(--dim); }
 #lyricsHint { position: absolute; inset: 0; display: none; align-items: center;
   justify-content: center; color: var(--dim); font-size: 14px; }
@@ -342,6 +348,7 @@ input, select { font-family: inherit; }
 #mvTitle { flex: 1; min-width: 0; color: #fff; font-size: 14px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #mvMore { color: #fff; flex: none; }
+#mvFull { color: #fff; flex: none; }
 #mvStage { flex: 1; min-height: 0; display: flex; align-items: center;
   justify-content: center; background: #000; }
 #mvVideo, #mvFrame { border: 0; background: #000; width: 100%; height: 100%; }

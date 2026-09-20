@@ -18,7 +18,7 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 HOME = "https://www.bilibili.com/"
 SEARCH_API = "https://api.bilibili.com/x/web-interface/search/type"
 EMBED_URL = ("https://player.bilibili.com/player.html?bvid=%s"
-             "&autoplay=1&danmaku=0&high_quality=1")
+             "&page=1&autoplay=1&danmaku=0&high_quality=1&as_wide=1")
 
 _session = requests.Session()
 _session.headers.update({"User-Agent": UA, "Referer": HOME})

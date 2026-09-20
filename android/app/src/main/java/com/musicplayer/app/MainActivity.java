@@ -2,9 +2,14 @@ package com.musicplayer.app;
 
 import android.app.Activity;
 import android.os.Bundle;
+import android.view.View;
+import android.view.ViewGroup;
+import android.webkit.PermissionRequest;
+import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
 
 import com.chaquo.python.PyObject;
 import com.chaquo.python.Python;
@@ -16,6 +21,9 @@ import java.io.InputStream;
 
 public class MainActivity extends Activity {
     private WebView webView;
+    private FrameLayout root;
+    private View fullView;                 // 视频全屏时的自定义视图
+    private WebChromeClient.CustomViewCallback fullCallback;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -49,8 +57,55 @@ public class MainActivity extends Activity {
         s.setAllowFileAccess(true);
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        s.setJavaScriptCanOpenWindowsAutomatically(true);
         webView.setWebViewClient(new WebViewClient());
-        setContentView(webView);
+
+        // 视频全屏支持 (网易云 <video> 与 B 站内嵌播放器的全屏按钮都靠它)
+        webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onShowCustomView(View view,
+                                         CustomViewCallback callback) {
+                if (fullView != null) {
+                    callback.onCustomViewHidden();
+                    return;
+                }
+                fullView = view;
+                fullCallback = callback;
+                view.setBackgroundColor(0xFF000000);
+                root.addView(view, new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT));
+                webView.setVisibility(View.GONE);
+            }
+
+            @Override
+            public void onHideCustomView() {
+                if (fullView == null) {
+                    return;
+                }
+                root.removeView(fullView);
+                fullView = null;
+                webView.setVisibility(View.VISIBLE);
+                if (fullCallback != null) {
+                    try {
+                        fullCallback.onCustomViewHidden();
+                    } catch (Exception ignored) {
+                    }
+                    fullCallback = null;
+                }
+            }
+
+            @Override
+            public void onPermissionRequest(PermissionRequest request) {
+                request.grant(request.getResources());   // 媒体权限直接放行
+            }
+        });
+
+        root = new FrameLayout(this);
+        root.addView(webView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+        setContentView(root);
         webView.loadUrl("http://127.0.0.1:" + port + "/");
     }
 
@@ -85,8 +140,29 @@ public class MainActivity extends Activity {
         return out;
     }
 
+    private void exitFullscreen() {
+        if (fullView == null) {
+            return;
+        }
+        root.removeView(fullView);
+        fullView = null;
+        webView.setVisibility(View.VISIBLE);
+        if (fullCallback != null) {
+            try {
+                fullCallback.onCustomViewHidden();
+            } catch (Exception ignored) {
+            }
+            fullCallback = null;
+        }
+    }
+
     @Override
     public void onBackPressed() {
+        // 视频全屏时, 返回键先退出全屏
+        if (fullView != null) {
+            exitFullscreen();
+            return;
+        }
         if (webView != null && webView.canGoBack()) {
             webView.goBack();
         } else {

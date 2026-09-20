@@ -182,11 +182,12 @@
   <div id="mvHead">
     <button id="mvClose" class="navBtn" title="关闭">&#10005;</button>
     <div id="mvTitle"></div>
+    <button id="mvFull" class="linkBtn" title="全屏">全屏</button>
     <button id="mvMore" class="linkBtn" title="更多MV">换一个</button>
   </div>
   <div id="mvStage">
     <video id="mvVideo" controls playsinline webkit-playsinline></video>
-    <iframe id="mvFrame" allowfullscreen allow="autoplay; fullscreen"></iframe>
+    <iframe id="mvFrame" allowfullscreen referrerpolicy="no-referrer" allow="autoplay; fullscreen; encrypted-media"></iframe>
   </div>
   <div id="mvList"></div>
 </div>

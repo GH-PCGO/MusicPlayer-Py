@@ -143,36 +143,68 @@ def _resolve_rid(title, artist):
     return str(items[0][0]) if items else ""
 
 
-def _search_mv(kw, limit=8):
-    """并发搜索网易云 + B站 MV, 合并返回; 结果缓存 60s。"""
+def _norm_title(s):
+    """归一化标题 (去空格/标点/标签), 用于相关性判断。"""
+    s = (s or "").lower()
+    for ch in " \t\u3000《》()（）[]【】-—_.,，。、'\"|/\\·!！?？~":
+        s = s.replace(ch, "")
+    return s
+
+
+def _search_mv(kw, limit=8, title="", artist=""):
+    """并发搜索网易云 + B站 MV, 统一按相关性排序; 结果缓存 60s。
+
+    相关性: 只保留标题包含歌名的结果, 再按 "标题含歌手名 / 播放量" 排序 ——
+    这样 B站官方 MV (播放量高、标题含歌手名) 会排在网易云翻唱之前,
+    避免"搜出一堆无关视频"。
+    """
     kw = (kw or "").strip()
     if not kw:
         return []
+    cache_key = kw + "\x00" + (title or "") + "\x00" + (artist or "")
     now = time.time()
     with _mv_lock:
-        hit = _mv_cache.get(kw)
+        hit = _mv_cache.get(cache_key)
         if hit and now - hit[0] < 60:
             return hit[1]
-    out = []
 
-    def collect(fn):
+    nout, bout = [], []
+
+    def collect(dst, fn):
         try:
-            out.extend(fn())
+            dst.extend(fn())
         except Exception:  # noqa: BLE001
             pass
 
     threads = [
         threading.Thread(target=collect,
-                         args=(lambda: netease.search_mv(kw, limit),)),
+                         args=(nout, lambda: netease.search_mv(kw, limit))),
         threading.Thread(target=collect,
-                         args=(lambda: bilibili.search_mv(kw, limit),)),
+                         args=(bout, lambda: bilibili.search_mv(kw, limit))),
     ]
     for t in threads:
         t.start()
     for t in threads:
         t.join(20)
+
+    nt = _norm_title(title)
+    na = _norm_title((artist or "").split(" / ")[0])
+    items = nout + bout
+    if nt:
+        items = [m for m in items if nt in _norm_title(m.get("name"))]
+
+    def score(m):
+        s = min((m.get("play") or 0) / 1e6, 50.0)      # 播放量为主 (单位: 百万, 封顶50)
+        if na and na in _norm_title(m.get("name")):
+            s += 30.0                                   # 标题含歌手名 → 更相关
+        if m.get("source") == "netease":
+            s += 3.0
+        return s
+
+    items.sort(key=score, reverse=True)
+    out = items[:limit]
     with _mv_lock:
-        _mv_cache[kw] = (now, out)
+        _mv_cache[cache_key] = (now, out)
     return out
 
 
@@ -389,10 +421,12 @@ class Handler(BaseHTTPRequestHandler):
 
             if p == "/api/mv/search":
                 kw = (q.get("kw") or [""])[0].strip()
+                title = (q.get("title") or [""])[0].strip()
+                artist = (q.get("artist") or [""])[0].strip()
                 limit = min(15, max(1, int((q.get("limit") or ["8"])[0])))
                 if not kw:
                     return self._json({"items": []})
-                return self._json({"items": _search_mv(kw, limit)})
+                return self._json({"items": _search_mv(kw, limit, title, artist)})
 
             if p == "/api/mv/url":
                 mid = (q.get("id") or [""])[0]

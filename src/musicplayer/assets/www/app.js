@@ -653,7 +653,9 @@ async function watchMv(item) {
   toast("正在获取 MV…");
   try {
     const data = await fetchJson(
-      "/api/mv/search?kw=" + encodeURIComponent(kw) + "&limit=8", 25000);
+      "/api/mv/search?kw=" + encodeURIComponent(kw)
+      + "&title=" + encodeURIComponent(title)
+      + "&artist=" + encodeURIComponent(item.artist || "") + "&limit=8", 25000);
     const items = (data.items || []).filter((x) => x && (x.bvid || x.id));
     if (!items.length) { toast("未找到该歌曲的 MV"); return; }
     state.mvList = items;
@@ -692,12 +694,20 @@ function playMv(mv) {
       if (p && p.catch) p.catch(() => {});
     }).catch(() => toast("MV 解析失败"));
   } else {
-    // B站: 内嵌官方播放器 iframe
+    // B站: 取内嵌播放地址(JSON) 再设为 iframe.src (之前误把 JSON 接口当页面直接塞进去 → 显示 JSON 文本)
     try { video.pause(); } catch (e) {}
     video.style.display = "none";
     video.removeAttribute("src");
     frame.style.display = "";
-    frame.src = "/api/mv/embed?bvid=" + mv.bvid;
+    frame.removeAttribute("src");
+    fetchJson("/api/mv/embed?bvid=" + mv.bvid, 15000).then((d) => {
+      frame.src = (d && d.url) ? d.url : ("https://player.bilibili.com/player.html"
+        + "?bvid=" + mv.bvid + "&page=1&autoplay=1&danmaku=0"
+        + "&high_quality=1&as_wide=1");
+    }).catch(() => {
+      frame.src = "https://player.bilibili.com/player.html?bvid=" + mv.bvid
+        + "&page=1&autoplay=1&danmaku=0&high_quality=1&as_wide=1";
+    });
   }
 }
 function renderMvCandidates() {
@@ -743,6 +753,28 @@ function hideMvOverlay() {
 function closeMvOverlay() {
   hideMvOverlay();
   if (history.state && history.state.page === "mv") history.back();
+}
+/** 全屏: 网易云 <video> 直接请求全屏; B站 iframe 用它自带的全屏按钮 */
+function toggleMvFullscreen() {
+  const video = $("mvVideo"), frame = $("mvFrame");
+  const iframeActive = frame && frame.style.display !== "none";
+  const el = iframeActive ? frame : video;
+  const doc = document;
+  const fsEl = doc.fullscreenElement || doc.webkitFullscreenElement;
+  try {
+    if (!fsEl) {
+      if (el.requestFullscreen) el.requestFullscreen();
+      else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+      else if (el.webkitEnterFullscreen) el.webkitEnterFullscreen();
+      else if (iframeActive) { toast("请点 B站播放器右下角的全屏按钮"); return; }
+      else toast("当前环境不支持全屏");
+    } else {
+      if (doc.exitFullscreen) doc.exitFullscreen();
+      else if (doc.webkitExitFullscreen) doc.webkitExitFullscreen();
+    }
+  } catch (e) {
+    toast(iframeActive ? "请点 B站播放器内的全屏按钮" : "全屏失败");
+  }
 }
 
 /* ---------------- 播放 ---------------- */
@@ -1076,6 +1108,7 @@ function seekToLyricLine(line) {
       tapped: lyricLineAt(e.clientY - rect.top, startTranslate),
     };
     state.lyrDragging = true;
+    $("lyricsLines").classList.add("dragging");   // 拖动时禁用滚动动画, 直接跟手
     dragUI(true);
     try { scroll.setPointerCapture(e.pointerId); } catch (err) {}
     e.preventDefault();
@@ -1106,6 +1139,7 @@ function seekToLyricLine(line) {
     drag = null;
     state.lyrDragging = false;
     state.lyrTranslate = null;
+    $("lyricsLines").classList.remove("dragging");
     dragUI(false);
     if (moved && line === curLyricLine()) {
       positionLyrics(line);          // 未跨行, 回到播放位置
@@ -1179,6 +1213,7 @@ function bindEvents() {
   // MV 播放层
   $("mvClose").addEventListener("click", closeMvOverlay);
   $("mvMore").addEventListener("click", toggleMvList);
+  $("mvFull").addEventListener("click", toggleMvFullscreen);
   $("qpClear").addEventListener("click", clearQueue);
   // 音量
   $("volIcon").addEventListener("click", () => {

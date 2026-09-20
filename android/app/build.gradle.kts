@@ -34,7 +34,16 @@ android {
 chaquopy {
     defaultConfig {
         version = "3.11"
-        buildPython("/Users/conquer/android-toolchain/python311/bin/python3")
+        // 构建机 Python 3.11: 优先本机 Windows 工具链, 回退作者 mac 路径, 再回退 PATH
+        val winPy = "D:/WorkSpace/Personal-PC/Music/AndroidToolchain/python311/python.exe"
+        val macPy = "/Users/conquer/android-toolchain/python311/bin/python3"
+        buildPython(
+            when {
+                file(winPy).exists() -> winPy
+                file(macPy).exists() -> macPy
+                else -> "python"
+            }
+        )
         pip {
             // 绾?Python 渚濊禆; 璧?TUNA 闀滃儚鍔犻€?            options("--index-url", "https://pypi.tuna.tsinghua.edu.cn/simple")
             install("requests")
@@ -48,6 +57,7 @@ chaquopy {
         }
     }
 }
+
 
 
 
