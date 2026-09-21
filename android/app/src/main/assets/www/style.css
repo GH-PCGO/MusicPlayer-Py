@@ -121,6 +121,10 @@ input, select { font-family: inherit; }
   overflow: hidden; text-overflow: ellipsis; }
 .hotPlay { flex: none; color: var(--dim); width: 24px; text-align: right;
   display: flex; align-items: center; justify-content: flex-end; }
+/* 收藏行右侧的爱心 (点击取消收藏) */
+.hotHeart { flex: none; width: 34px; display: flex; align-items: center;
+  justify-content: flex-end; color: var(--accent); }
+.hotHeart:active { opacity: .6; }
 
 /* ---------------- 搜索页 ---------------- */
 #hotBox { padding: 12px 14px 4px; }
@@ -335,6 +339,9 @@ input, select { font-family: inherit; }
   border-radius: 16px; padding: 6px 16px; font-size: 13px; font-weight: 600; }
 .pactBtn:active { background: var(--accent-soft); color: var(--accent-txt);
   border-color: transparent; }
+/* 已收藏: 实心爱心 + 主题色 */
+.pactBtn.on { color: var(--accent); border-color: var(--accent);
+  background: var(--accent-soft); }
 
 /* ---------------- MV 播放层 (自适应手机屏幕) ---------------- */
 #mvOverlay { position: fixed; inset: 0; z-index: 80; display: flex;
@@ -382,3 +389,79 @@ input, select { font-family: inherit; }
   padding: 9px 18px; border-radius: 20px; font-size: 13px; opacity: 0;
   pointer-events: none; transition: opacity .2s; max-width: 80%; text-align: center; }
 #toast.show { opacity: 1; }
+
+/* ---------------- 歌单导入 ---------------- */
+.pillBtn { flex: none; border: 1px solid var(--accent); background: var(--accent-soft);
+  color: var(--accent); font-size: 13px; font-weight: 700; padding: 6px 13px;
+  border-radius: 16px; }
+.pillBtn:active { opacity: .7; }
+.countTag { font-style: normal; font-size: 12px; font-weight: 500;
+  color: var(--dim); margin-left: 6px; }
+
+/* 「我的」页入口行 */
+#dlMenu { padding: 8px 10px 0; }
+.menuRow { display: flex; align-items: center; gap: 12px; width: 100%;
+  border: 1px solid var(--border); background: var(--card); border-radius: 14px;
+  padding: 13px 14px; text-align: left; color: var(--deep); }
+.menuRow:active { background: var(--accent-soft); }
+.menuIcon { flex: none; width: 34px; height: 34px; border-radius: 50%;
+  background: var(--accent-soft); color: var(--accent); font-size: 17px;
+  display: flex; align-items: center; justify-content: center; }
+.menuText { flex: 1; min-width: 0; font-size: 15px; font-weight: 600;
+  display: flex; flex-direction: column; gap: 3px; }
+.menuText small { font-size: 11px; font-weight: 400; color: var(--dim); }
+.menuArrow { flex: none; color: var(--dim); font-size: 20px; }
+
+#impMask { position: fixed; inset: 0; z-index: 72; display: none;
+  background: rgba(15,18,24,.35); }
+#impMask.on { display: block; }
+#impSheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 73;
+  background: #FCFCFE; border-radius: 20px 20px 0 0; padding: 0 20px
+  calc(18px + env(safe-area-inset-bottom)); max-height: 82vh; overflow-y: auto;
+  transform: translateY(105%); transition: transform .26s cubic-bezier(.22,1,.36,1);
+  box-shadow: 0 -8px 30px rgba(0,0,0,.18); }
+#impSheet.on { transform: translateY(0); }
+.impHint { font-size: 12px; line-height: 1.7; color: var(--dim);
+  background: var(--bg); border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; }
+.impHint b { color: var(--deep); }
+#impCookie { width: 100%; box-sizing: border-box; border: 1px solid var(--border);
+  border-radius: 12px; padding: 10px; font-size: 12px; line-height: 1.5;
+  background: var(--bg); color: var(--deep); resize: vertical; }
+.primaryBtn { width: 100%; margin-top: 12px; border: 0; border-radius: 14px;
+  background: var(--accent); color: #fff; font-size: 15px; font-weight: 700;
+  padding: 13px 0; }
+.primaryBtn:disabled { opacity: .55; }
+.primaryBtn:active { opacity: .8; }
+.ghostBtn { border: 1px solid var(--border); background: var(--card);
+  color: var(--deep); font-size: 13px; font-weight: 600; border-radius: 14px;
+  padding: 10px 16px; }
+.ghostBtn:active { background: var(--accent-soft); }
+.impTip { font-size: 11px; color: var(--dim); margin-top: 12px; line-height: 1.6; }
+.impRow2 { display: flex; gap: 8px; margin-top: 8px; }
+#impPid { flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: 12px;
+  padding: 10px 12px; font-size: 12px; background: var(--bg); color: var(--deep); }
+.impRow { display: flex; gap: 10px; margin-top: 14px; }
+.impUser { display: flex; align-items: center; gap: 10px; padding: 6px 0 10px;
+  font-size: 14px; font-weight: 700; color: var(--deep); }
+.impUser img { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; }
+.impUser small { font-weight: 400; color: var(--dim); font-size: 11px; }
+#impPl { max-height: 46vh; overflow-y: auto; }
+.impPlRow { display: flex; align-items: center; gap: 11px; padding: 9px 4px;
+  border-top: 1px solid rgba(0,0,0,.05); }
+.impPlRow:active { background: var(--accent-soft); }
+.impPlRow img, .impPlRow .ph { width: 42px; height: 42px; border-radius: 8px;
+  object-fit: cover; flex: none; background: var(--bg); }
+.impPlInfo { flex: 1; min-width: 0; }
+.impPlName { font-size: 14px; color: var(--deep); display: flex; align-items: center;
+  gap: 6px; }
+.impPlName span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.impPlSub { font-size: 11px; color: var(--dim); margin-top: 3px; }
+.impBadge { flex: none; font-size: 10px; font-weight: 700; padding: 1px 6px;
+  border-radius: 7px; background: var(--accent-soft); color: var(--accent); }
+.impGo { flex: none; font-size: 12px; font-weight: 700; color: var(--accent); }
+.impRunName { font-size: 14px; font-weight: 700; color: var(--deep); margin-bottom: 10px; }
+.impBar { height: 7px; border-radius: 4px; background: var(--bg); overflow: hidden; }
+#impFill { height: 100%; width: 0%; border-radius: 4px; background: var(--accent);
+  transition: width .2s; }
+.impRunTxt { font-size: 12px; color: var(--dim); margin: 9px 0 14px; }
+#impList, #impRun { padding-bottom: 4px; }

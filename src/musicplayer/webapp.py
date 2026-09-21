@@ -24,6 +24,10 @@
   GET  /api/audio?name=      播放本地音乐 (支持 Range 拖动进度)
   GET  /api/audio_cover?name= 本地音乐内嵌封面
   DELETE /api/download?name= 删除本地音乐 (含同名 .lrc; 安卓同步删媒体库)
+  POST /api/import/login      歌单导入: 校验网易云 cookie → 账号信息
+  POST /api/import/playlists  歌单导入: 账号歌单列表 (含私有/「我喜欢的音乐」)
+  POST /api/import/songs      歌单导入: 歌单全部歌曲
+  POST /api/import/match      歌单导入: 批量匹配酷我音源 (返回 rid 可播放)
 """
 import json
 import mimetypes
@@ -32,13 +36,16 @@ import re
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from musicplayer.kuwo import KuwoAPI
-from musicplayer.lyrics import fetch_lyrics, parse_lrc, read_cover
+from musicplayer.lyrics import (fetch_lyrics, lrc_to_plain, mp3_duration,
+                                parse_lrc, read_cover, read_uslt, save_lrc)
 from musicplayer import androidstorage
 from musicplayer import bilibili
+from musicplayer import kugou
 from musicplayer import netease
 from musicplayer import paths
 
@@ -149,6 +156,179 @@ def _norm_title(s):
     for ch in " \t\u3000《》()（）[]【】-—_.,，。、'\"|/\\·!！?？~":
         s = s.replace(ch, "")
     return s
+
+
+_match_lock = threading.Lock()
+_match_cache = {}      # (歌名|歌手) 归一化 → (rid, 酷我封面) / None (未匹配)
+_match_tls = threading.local()
+_MISS = object()
+
+
+def _import_link_source(link):
+    """歌单链接/ID → ("kugou"|"netease", 归一化目标)。
+
+    酷狗分享链接直接用原链接; 网易云支持 "id=123456" 或纯数字。
+    """
+    t = (link or "").strip()
+    if not t:
+        return "", ""
+    if kugou.is_kugou_link(t):
+        return "kugou", t
+    m = re.search(r"[?&#]id=(\d+)", t) or re.search(r"(\d{5,})", t)
+    return "netease", (m.group(1) if m else "")
+
+
+def _local_lrc_path(name):
+    """本地文件 → 同名 .lrc 路径 (带目录穿越保护); 非法返回 None。"""
+    base = os.path.normpath(paths.DOWNLOAD_DIR)
+    full = os.path.normpath(os.path.join(base, name or ""))
+    if not full.startswith(base) or not os.path.isfile(full):
+        return None
+    return full
+
+
+def local_lyrics(name, title="", artist=""):
+    """本地歌曲歌词: 同名 .lrc → 在线回补(并落盘) → 内嵌 USLT(按时长摊开)。
+
+    下载时已尽量写入 .lrc/USLT, 但老文件或当时没抓到歌词的会缺失, 所以这里
+    再给一次在线回补的机会, 顺带把结果存成 .lrc, 下次直接命中。
+    """
+    full = _local_lrc_path(name)
+    if not full:
+        return ""
+    lrc_path = os.path.splitext(full)[0] + ".lrc"
+    lrc = ""
+    if os.path.isfile(lrc_path):
+        try:
+            with open(lrc_path, encoding="utf-8") as f:
+                lrc = f.read().strip()
+        except OSError:
+            lrc = ""
+    if not lrc and title:
+        try:
+            got = fetch_lyrics("", title, artist or "", session=_api._session)
+        except Exception:  # noqa: BLE001
+            got = None
+        if got:
+            lrc = got.strip()
+            save_lrc(full, lrc)                    # 存下来, 下次免联网
+    if not lrc and full.lower().endswith(".mp3"):
+        try:
+            text, _lang = read_uslt(full)
+        except Exception:  # noqa: BLE001
+            text = None
+        if text:
+            # 内嵌 USLT 是无时间戳纯文本: 按音频时长把行均匀摊开,
+            # 这样歌词能大致跟着进度滚, 而不是全挤在 0 秒
+            lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+            dur = 0.0
+            try:
+                dur = float(mp3_duration(full) or 0)
+            except Exception:  # noqa: BLE001
+                dur = 0.0
+            if lines:
+                step = (dur / len(lines)) if dur > 5 else 1.0
+                lrc = "\n".join(
+                    "[%02d:%05.2f]%s" % (int(i * step) // 60, (i * step) % 60, ln)
+                    for i, ln in enumerate(lines))
+    return lrc
+
+
+def _pick_match(items, title, artist):
+    """酷我搜索结果里挑最贴近 (title, artist) 的一条 → (rid, 名, 歌手, 封面)。
+
+    要求歌名归一化后相等或互相包含, 再按歌手是否吻合加分; 否则视为未匹配,
+    宁可漏也不要把别首歌的 rid 塞进来 (会导致播放/歌词全错)。
+    """
+    nt = _norm_title(title)
+    if not nt:
+        return None
+    na = _norm_title((artist or "").split(" / ")[0])
+    best, best_score = None, 0
+    for rid, n, a, c in items or []:
+        nn = _norm_title(n)
+        if nn == nt:
+            score = 60
+        elif nt in nn or nn in nt:
+            score = 40
+        else:
+            continue
+        an = _norm_title(a)
+        if na and an:
+            score += 30 if (na in an or an in na) else -20
+        elif na:
+            score -= 10
+        if score > best_score:
+            best, best_score = (rid, n, a, c), score
+    return best if best_score >= 40 else None
+
+
+def _match_one(title, artist):
+    """(歌名, 歌手) → (rid, 酷我封面) 或 None; 带缓存, 每线程一个酷我会话。
+
+    注意: 只有「搜到了结果但没有可接受的候选」才写缓存 —— 网络异常/被限流
+    (搜索报错或返回空) 一律不写, 否则一次抖动就会把这歌永久标成"未匹配"。
+    """
+    key = _norm_title(title) + "\x00" + _norm_title((artist or "").split(" / ")[0])
+    with _match_lock:
+        hit = _match_cache.get(key, _MISS)
+    if hit is not _MISS:
+        return hit
+    api = getattr(_match_tls, "api", None)
+    if api is None:
+        api = _match_tls.api = KuwoAPI()
+    a0 = (artist or "").split(" / ")[0].strip()
+    kw = (a0 + " " + title).strip() if a0 else title
+    out = None
+    retryable = True
+    for attempt in (0, 1):                  # 被限流/超时时重试一次
+        try:
+            items = api.search(kw, page=1)
+            if not items and a0:
+                items = api.search(title, page=1)
+            if not items:
+                raise IOError("empty search")   # 空结果多半是被限流, 不当结论
+            got = _pick_match(items, title, artist)
+            if got is None and a0:
+                # 带歌手搜不出候选 → 退化只用歌名再找一遍
+                got = _pick_match(api.search(title, page=1), title, artist)
+            if got:
+                out = (str(got[0]), KuwoAPI.cover_url(got[3]))
+            retryable = False
+            break
+        except Exception:  # noqa: BLE001
+            time.sleep(0.3 * (attempt + 1))
+    if not retryable:
+        with _match_lock:
+            if len(_match_cache) > 5000:
+                _match_cache.clear()
+            _match_cache[key] = out
+    return out
+
+
+def _import_match(rows, workers=5, chunk=40):
+    """批量把 (歌名, 歌手) 匹配到酷我音源 → [{rid, name, artist, cover, matched}]。
+
+    并发 (每线程独立 Session) 是因为逐首串行搜歌单会慢到不可用。
+    """
+    items = [r for r in (rows or []) if (r.get("name") or "").strip()][:chunk]
+    out = []
+    if not items:
+        return out
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = [ex.submit(_match_one, r["name"].strip(), r.get("artist") or "")
+                for r in items]
+        for r, fut in zip(items, futs):
+            try:
+                got = fut.result(timeout=45)
+            except Exception:  # noqa: BLE001
+                got = None
+            rid, cover = got if got else ("", "")
+            out.append({"rid": rid, "name": r["name"].strip(),
+                        "artist": r.get("artist") or "",
+                        "cover": r.get("cover") or cover,
+                        "matched": bool(rid)})
+    return out
 
 
 def _search_mv(kw, limit=8, title="", artist=""):
@@ -354,6 +534,14 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
     # ------------------------------------------------------------ 路由
+    def _body(self):
+        """读取并解析 JSON 请求体; 失败返回 None。"""
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            return json.loads(self.rfile.read(n).decode("utf-8"))
+        except Exception:  # noqa: BLE001
+            return None
+
     def do_GET(self):
         try:
             u = urlparse(self.path)
@@ -385,12 +573,16 @@ class Handler(BaseHTTPRequestHandler):
 
             if p == "/api/lyrics":
                 rid = (q.get("rid") or [""])[0]
+                name = (q.get("name") or [""])[0]
                 title = (q.get("title") or [""])[0]
                 artist = (q.get("artist") or [""])[0]
                 lrc = ""
                 try:
-                    lrc = fetch_lyrics(rid, title, artist,
-                                       session=_api._session) or ""
+                    if name:                       # 本地文件 (下载/我的音乐)
+                        lrc = local_lyrics(name, title, artist) or ""
+                    else:
+                        lrc = fetch_lyrics(rid, title, artist,
+                                           session=_api._session) or ""
                 except Exception:  # noqa: BLE001
                     lrc = ""
                 lines = parse_lrc(lrc) if lrc else []
@@ -495,9 +687,60 @@ class Handler(BaseHTTPRequestHandler):
     def do_HEAD(self):
         self.do_GET()
 
+    def _do_import(self, path):
+        """歌单导入: 网易云 cookie 登录 → 歌单列表 → 全部歌曲 → 匹配酷我音源。"""
+        data = self._body()
+        if data is None:
+            return self._json({"error": "bad json"}, 400)
+        cookie = str(data.get("cookie") or "")
+        try:
+            if path == "/api/import/login":
+                try:
+                    prof = netease.user_profile(cookie)
+                except ValueError as exc:
+                    return self._json({"error": str(exc)}, 400)
+                return self._json(dict(prof, ok=True))
+            if path == "/api/import/playlists":
+                uid = str(data.get("uid") or "").strip()
+                return self._json(
+                    {"items": netease.user_playlists(cookie, uid or None)})
+            if path == "/api/import/songs":
+                link = (str(data.get("link") or "").strip()
+                        or str(data.get("id") or "").strip())
+                if not link:
+                    return self._json({"error": "缺少歌单链接/id"}, 400)
+                try:
+                    limit = int(data.get("limit") or 1000)
+                except (TypeError, ValueError):
+                    limit = 1000
+                limit = min(2000, max(1, limit))
+                src, target = _import_link_source(link)
+                if src == "kugou":
+                    name, rows = kugou.parse_songlist(target, limit)
+                    if not rows:
+                        return self._json(
+                            {"error": "没解析到酷狗歌单（请用 App 里"
+                                      "「分享歌单」的链接）"}, 502)
+                elif src == "netease" and target:
+                    name, rows = netease.playlist_songs_all(cookie, target, limit)
+                else:
+                    return self._json({"error": "没识别到歌单链接/id"}, 400)
+                return self._json({"name": name, "items": [
+                    {"name": n, "artist": a, "cover": c} for n, a, c in rows]})
+            if path == "/api/import/match":
+                return self._json(
+                    {"items": _import_match(data.get("items") or [])})
+            return self._json({"error": "not found"}, 404)
+        except ValueError as exc:
+            return self._json({"error": str(exc)}, 400)
+        except Exception as exc:  # noqa: BLE001
+            return self._json({"error": "导入失败: %s" % exc}, 502)
+
     def do_POST(self):
         try:
             u = urlparse(self.path)
+            if u.path.startswith("/api/import/"):
+                return self._do_import(u.path)
             if u.path != "/api/download":
                 return self._json({"error": "not found"}, 404)
             try:

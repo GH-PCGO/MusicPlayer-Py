@@ -190,6 +190,31 @@ def read_uslt(path):
         header = f.read(10)
     if len(header) < 10 or header[:3] != b"ID3":
         return None, None
+    ver = header[3]
+    tag_size = _syncsafe_decode(header[6:10])
+    with open(path, "rb") as f:
+        f.seek(10)
+        tag_data = f.read(tag_size)
+    frames, _ = _parse_frames(tag_data, ver)
+    for fid, fsize, fflags, fdata in frames:
+        if fid == b"USLT" and fdata:
+            enc_byte = fdata[0]
+            lang = fdata[1:4].decode("ascii", errors="replace")
+            rest = fdata[4:]
+            parts = rest.split(b"\x00", 1)
+            lyrics = parts[1] if len(parts) == 2 else rest
+            try:
+                if enc_byte == 0:
+                    return lyrics.decode("latin-1"), lang
+                elif enc_byte == 1:
+                    return lyrics.decode("utf-16"), lang
+                elif enc_byte == 2:
+                    return lyrics.decode("utf-16-be"), lang
+                else:
+                    return lyrics.decode("utf-8"), lang
+            except Exception:  # noqa: BLE001
+                return lyrics.decode("utf-8", errors="replace"), lang
+    return None, None
 
 
 def read_cover(path):
@@ -235,35 +260,6 @@ def read_cover(path):
     except Exception:  # noqa: BLE001
         pass
     return None
-    ver = header[3]
-    tag_size = _syncsafe_decode(header[6:10])
-    f = open(path, "rb")
-    f.seek(10)
-    tag_data = f.read(tag_size)
-    f.close()
-    frames, _ = _parse_frames(tag_data, ver)
-    for fid, fsize, fflags, fdata in frames:
-        if fid == b"USLT" and fdata:
-            enc_byte = fdata[0]
-            lang = fdata[1:4].decode("ascii", errors="replace")
-            rest = fdata[4:]
-            parts = rest.split(b"\x00", 1)
-            if len(parts) == 2:
-                lyrics = parts[1]
-            else:
-                lyrics = rest
-            try:
-                if enc_byte == 0:
-                    return lyrics.decode("latin-1"), lang
-                elif enc_byte == 1:
-                    return lyrics.decode("utf-16"), lang
-                elif enc_byte == 2:
-                    return lyrics.decode("utf-16-be"), lang
-                else:
-                    return lyrics.decode("utf-8"), lang
-            except Exception:
-                return lyrics.decode("utf-8", errors="replace"), lang
-    return None, None
 
 
 # ============================================================ 歌词获取

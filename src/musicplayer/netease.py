@@ -50,11 +50,15 @@ def _get(url, timeout=15):
 
 
 def _track_row(t):
-    """网易云 track → (歌名, 歌手, 封面URL)。"""
+    """网易云 track → (歌名, 歌手, 封面URL)。
+
+    兼容两套字段: 旧 web 接口用 artists/album, v6/weapi 用 ar/al。
+    """
     name = (t.get("name") or "").strip()
-    artists = " / ".join(a.get("name", "") for a in (t.get("artists") or [])
-                         if a.get("name"))
-    pic = (t.get("album") or {}).get("picUrl") or ""
+    ars = t.get("artists") or t.get("ar") or []
+    artists = " / ".join(a.get("name", "") for a in ars if a.get("name"))
+    alb = t.get("album") or t.get("al") or {}
+    pic = alb.get("picUrl") or alb.get("picUrl_str") or ""
     return name, artists, pic
 
 
@@ -100,6 +104,114 @@ def fetch_playlist_songs(playlist_id, limit=50):
         if len(out) >= limit:
             break
     return name, out
+
+
+# ------------------------------------------------------------------ 歌单导入
+def _https(url):
+    """http 封面统一升到 https (安卓 WebView 不允许明文 http)。"""
+    url = url or ""
+    if url.startswith("http://"):
+        return "https://" + url[7:]
+    return url
+
+
+def _user_session(cookie):
+    """带用户 cookie 的独立 Session (不影响公开接口的模块级 Session)。
+
+    cookie 为空时退化为匿名会话 —— 公开歌单同样可以直接读取。
+    """
+    sess = requests.Session()
+    sess.headers.update({"User-Agent": UA, "Referer": HOME})
+    cookie = (cookie or "").strip()
+    if cookie:
+        if "=" not in cookie:                     # 允许只粘贴 MUSIC_U 的值
+            cookie = "MUSIC_U=" + cookie
+        sess.headers.update({"Cookie": cookie})
+    return sess
+
+
+def _auth_get(sess, url, timeout=20):
+    resp = sess.get(url, timeout=timeout)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def user_profile(cookie):
+    """校验 cookie → ``{uid, nickname, avatar}``; 无效时抛 ValueError。"""
+    try:
+        data = _auth_get(_user_session(cookie),
+                         "https://music.163.com/api/nuser/account/get")
+    except ValueError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("网络错误: %s" % exc)
+    prof = data.get("profile") or {}
+    uid = prof.get("userId")
+    if not uid:
+        raise ValueError("cookie 无效或已过期")
+    return {"uid": uid, "nickname": prof.get("nickname") or "",
+            "avatar": _https(prof.get("avatarUrl"))}
+
+
+def user_playlists(cookie, uid=None):
+    """当前账号的歌单 (含私有歌单 / 「我喜欢的音乐」) → list[dict]。"""
+    sess = _user_session(cookie)
+    if not uid:
+        uid = user_profile(cookie)["uid"]
+    out, offset = [], 0
+    while True:
+        data = _auth_get(sess, "https://music.163.com/api/user/playlist/"
+                               "?uid=%s&limit=100&offset=%d" % (uid, offset))
+        page = data.get("playlist") or []
+        for p in page:
+            pid = p.get("id")
+            if not pid:
+                continue
+            out.append({
+                "id": pid,
+                "name": p.get("name") or "",
+                "cover": _https(p.get("coverImgUrl")),
+                "count": int(p.get("trackCount") or 0),
+                "special": int(p.get("specialType") or 0) == 5,
+                "creator": (p.get("creator") or {}).get("nickname") or "",
+            })
+        if not data.get("more") or not page or offset > 2000:
+            break
+        offset += len(page)
+    return out
+
+
+def playlist_songs_all(cookie, pid, limit=1000):
+    """歌单全部歌曲 (超过 1000 首用 song/detail 补齐) → (歌单名, [(名, 歌手, 封面)])。"""
+    sess = _user_session(cookie)
+    data = _auth_get(sess, "https://music.163.com/api/v6/playlist/detail"
+                           "?id=%s&n=%d&s=0" % (pid, max(1, limit)))
+    pl = data.get("playlist") or {}
+    name = pl.get("name") or ""
+    tracks = pl.get("tracks") or []
+    out = []
+    for t in tracks:
+        n, a, pic = _track_row(t)
+        if n:
+            out.append((n, a, _https(pic)))
+    ids = [x.get("id") for x in (pl.get("trackIds") or []) if x.get("id")]
+    if len(ids) > len(out):
+        have = {t.get("id") for t in tracks}
+        todo = [i for i in ids if i not in have]
+        for i in range(0, len(todo), 200):
+            chunk = todo[i:i + 200]
+            try:
+                dd = _auth_get(sess, "https://music.163.com/api/song/detail"
+                                     "?ids=[%s]" % ",".join(str(x) for x in chunk))
+            except Exception:  # noqa: BLE001
+                continue
+            for t in dd.get("songs") or []:
+                n, a, pic = _track_row(t)
+                if n:
+                    out.append((n, a, _https(pic)))
+            if len(out) >= limit:
+                break
+    return name, out[:limit]
 
 
 # ------------------------------------------------------------------ MV

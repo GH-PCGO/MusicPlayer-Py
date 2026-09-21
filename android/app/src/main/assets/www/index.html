@@ -79,16 +79,36 @@
   <div class="pageHead">
     <button class="navBtn" onclick="app.goHome()">&#10094;</button>
     <span class="pageTitle">我的音乐</span>
+    <button class="pillBtn" onclick="app.playAllLocal()">&#9654; 全部播放</button>
     <button id="dlRefresh" class="linkBtn" onclick="app.refreshDownloads()">刷新</button>
+  </div>
+  <div id="dlMenu">
+    <button class="menuRow" onclick="app.openImport()">
+      <span class="menuIcon">&#8681;</span>
+      <span class="menuText">导入歌单<small>网易云收藏 / 歌单 → 自动匹配音源</small></span>
+      <span class="menuArrow">&#8250;</span>
+    </button>
   </div>
   <div id="dlList"></div>
   <div id="dlEmpty" class="empty">还没有下载歌曲，去搜索页点 ↓ 下载</div>
+</section>
+
+<!-- ============ 页面: 收藏 ============ -->
+<section id="favoritesView" class="page" style="display:none">
+  <div class="pageHead">
+    <button class="navBtn" onclick="app.goHome()">&#10094;</button>
+    <span class="pageTitle">我的收藏<i id="favCount" class="countTag"></i></span>
+    <button class="pillBtn" onclick="app.openImport()">&#8681; 导入</button>
+  </div>
+  <div id="favList" class="hotList"></div>
+  <div id="favEmpty" class="empty">还没有收藏，在播放器点 &#9825; 即可收藏<br>或用右上角「导入」搬运网易云歌单</div>
 </section>
 
 <!-- ============ 底部导航 ============ -->
 <nav id="bottomNav">
   <button class="navItem active" data-page="home"><span class="niIcon">&#8962;</span><span class="niText">首页</span></button>
   <button class="navItem" data-page="search"><span class="niIcon">&#9906;</span><span class="niText">搜索</span></button>
+  <button class="navItem" data-page="favorites"><span class="niIcon">&#9825;</span><span class="niText">收藏</span></button>
   <button class="navItem" data-page="queue"><span class="niIcon">&#8801;</span><span class="niText">队列</span></button>
   <button class="navItem" data-page="download"><span class="niIcon">&#9660;</span><span class="niText">我的</span></button>
 </nav>
@@ -126,6 +146,7 @@
     <div id="playerArtist"></div>
   </div>
   <div id="playerActs">
+    <button id="playerFav" class="pactBtn" title="收藏">&#9825; 收藏</button>
     <button id="playerDl" class="pactBtn" title="下载">&#8595; 下载</button>
     <button id="playerMv" class="pactBtn" title="观看MV">&#9654; MV</button>
   </div>
@@ -190,6 +211,47 @@
     <iframe id="mvFrame" allowfullscreen referrerpolicy="no-referrer" allow="autoplay; fullscreen; encrypted-media"></iframe>
   </div>
   <div id="mvList"></div>
+</div>
+
+<!-- ============ 歌单导入面板 (网易云 cookie) ============ -->
+<div id="impMask" onclick="app.closeImport()"></div>
+<div id="impSheet">
+  <div class="sheetBar"></div>
+  <div class="sheetHead">
+    <span class="sheetTitle">导入歌单</span>
+    <button class="navBtn" onclick="app.closeImport()">&#10005;</button>
+  </div>
+
+  <div id="impLogin">
+    <div class="impHint">
+      登录网易云网页版 (music.163.com) 后，按 F12 → Network → 任意请求 →
+      复制请求头里的 <b>Cookie</b> 整串粘贴到下面。凭据只存在本机，仅用于读取你自己的歌单。
+    </div>
+    <textarea id="impCookie" rows="4" spellcheck="false"
+      placeholder="MUSIC_U=xxxx; __csrf=xxxx; NMTID=xxxx"></textarea>
+    <button id="impLoginBtn" class="primaryBtn" onclick="app.impLogin()">登录并读取歌单</button>
+    <div class="impTip">不想登录？直接粘歌单链接也行：网易云歌单 id，或酷狗「分享歌单」的链接。</div>
+    <div class="impRow2">
+      <input id="impPid" type="text" spellcheck="false" placeholder="网易云歌单 id / 酷狗歌单链接">
+      <button class="ghostBtn" onclick="app.impPublic()">导入歌单</button>
+    </div>
+  </div>
+
+  <div id="impList" style="display:none">
+    <div id="impUser" class="impUser"></div>
+    <div id="impPl"></div>
+    <div class="impRow">
+      <button class="ghostBtn" onclick="app.impLogout()">退出登录</button>
+      <button class="ghostBtn" onclick="app.impPublicPrompt()">用歌单链接导入</button>
+    </div>
+  </div>
+
+  <div id="impRun" style="display:none">
+    <div id="impRunName" class="impRunName"></div>
+    <div class="impBar"><div id="impFill"></div></div>
+    <div id="impRunTxt" class="impRunTxt"></div>
+    <button id="impCancel" class="ghostBtn" onclick="app.impCancel()">取消</button>
+  </div>
 </div>
 
 <div id="toast"></div>

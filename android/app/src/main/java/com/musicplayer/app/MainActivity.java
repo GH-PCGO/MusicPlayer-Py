@@ -2,10 +2,13 @@ package com.musicplayer.app;
 
 import android.app.Activity;
 import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -20,6 +23,7 @@ import com.chaquo.python.android.AndroidPlatform;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.lang.ref.WeakReference;
 
 public class MainActivity extends Activity {
     private WebView webView;
@@ -27,9 +31,48 @@ public class MainActivity extends Activity {
     private View fullView;                 // 视频全屏时的自定义视图
     private WebChromeClient.CustomViewCallback fullCallback;
 
+    private static WeakReference<MainActivity> sRef;
+
+    /** 供 PlaybackService 回调 (通知/锁屏按键 → 网页)。 */
+    public static MainActivity get() {
+        return sRef == null ? null : sRef.get();
+    }
+
+    /** 在 WebView 里执行一段 JS (主线程)。 */
+    public void evalJs(final String js) {
+        final WebView w = webView;
+        if (w == null) {
+            return;
+        }
+        w.post(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    w.evaluateJavascript(js, null);
+                } catch (Exception ignored) {
+                }
+            }
+        });
+    }
+
+    /** 网页 → 原生: 同步 "正在播放" 状态, 让前台服务/通知/锁屏跟着更新。 */
+    private class JsBridge {
+        @JavascriptInterface
+        public void setNowPlaying(String title, String artist,
+                                  boolean playing, String cover) {
+            PlaybackService.update(MainActivity.this, title, artist, playing, cover);
+        }
+
+        @JavascriptInterface
+        public void clear() {
+            PlaybackService.clear(MainActivity.this);
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        sRef = new WeakReference<>(this);
 
         // 1) 启动 Python 运行时
         if (!Python.isStarted()) {
@@ -61,6 +104,8 @@ public class MainActivity extends Activity {
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         s.setJavaScriptCanOpenWindowsAutomatically(true);
         webView.setWebViewClient(new WebViewClient());
+        webView.addJavascriptInterface(new JsBridge(), "AndroidPlayer");
+        requestNotifPermission();
 
         // 视频全屏支持: 进入时切横屏 + 沉浸式, 退出时还原
         webView.setWebChromeClient(new WebChromeClient() {
@@ -98,6 +143,18 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
         webView.loadUrl("http://127.0.0.1:" + port + "/");
+    }
+
+    /** Android 13+ 需要运行时授权才能显示播放通知 (拒绝也不影响播放)。 */
+    private void requestNotifPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return;
+        }
+        if (checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                == PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 1);
     }
 
     /** 进入横屏全屏: 强制横屏 + 隐藏状态栏/导航栏 (沉浸式)。 */
@@ -164,6 +221,14 @@ public class MainActivity extends Activity {
             e.printStackTrace();
         }
         return out;
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        // 故意不调用 webView.onPause(): 切后台/息屏后网页里的音频要继续播,
+        // 连播 (ended → 下一首) 也依赖 WebView 保持运行。
+        // 常驻由 PlaybackService 前台服务保证。
     }
 
     @Override
