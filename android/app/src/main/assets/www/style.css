@@ -246,9 +246,9 @@ input, select { font-family: inherit; }
 #lyricsLines { position: absolute; left: 0; right: 0; padding: 0 26px;
   will-change: transform; transition: transform .42s cubic-bezier(.22,.61,.36,1); }
 #lyricsLines.dragging { transition: none; }   /* 拖动时直接跟手, 不要动画 */
-/* 中心锚点: 左右两侧短标记 (不压歌词文字) */
+/* 中心锚点: 左右两侧短标记 (不压歌词文字); 只在拖动选时间时显示 */
 #lyrCenter { position: absolute; left: 0; right: 0; top: 42%; height: 0;
-  pointer-events: none; transition: opacity .15s; opacity: .3; }
+  pointer-events: none; transition: opacity .15s; opacity: 0; }
 #lyrCenter::before, #lyrCenter::after { content: ""; position: absolute; top: -4px;
   width: 16px; height: 8px; border-radius: 4px; background: var(--accent); }
 #lyrCenter::before { left: 10px; }
