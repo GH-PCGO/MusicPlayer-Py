@@ -1,7 +1,12 @@
-﻿plugins {
+plugins {
     id("com.android.application")
     id("com.chaquo.python")
 }
+
+// 版本号集中在这里: versionCode/versionName、APK 文件名、dist 拷贝都用它
+val appVersionCode = 20
+val appVersionName = "2.9"
+val apkBaseName = "MusicPlayer-android-v$appVersionName"
 
 android {
     namespace = "com.musicplayer.app"
@@ -11,10 +16,10 @@ android {
         applicationId = "com.musicplayer.app"
         minSdk = 29          // MediaStore RELATIVE_PATH/IS_PENDING 需要 API 29+
         targetSdk = 34
-        versionCode = 16
-        versionName = "2.5"
+        versionCode = appVersionCode
+        versionName = appVersionName
         ndk {
-            // 瑕嗙洊缁濆ぇ澶氭暟鐪熸満; 濡傞渶 32 浣嶈€佽澶囧彲鏀圭敤 Python 3.11 + armeabi-v7a
+            // 覆盖绝大多数真机; 如需 32 位老设备可改用 Python 3.11 + armeabi-v7a
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
     }
@@ -31,6 +36,26 @@ android {
     }
 }
 
+// 产物名带上版本号: app-debug.apk → MusicPlayer-android-v2.5.apk
+androidComponents {
+    onVariants { variant ->
+        variant.outputs.forEach { output ->
+            (output as? com.android.build.api.variant.impl.VariantOutputImpl)
+                ?.outputFileName?.set("$apkBaseName.apk")
+        }
+    }
+}
+
+// 一条命令出包并拷到 dist: gradle :app:distDebug
+tasks.register<Copy>("distDebug") {
+    dependsOn("assembleDebug")
+    from(layout.buildDirectory.file("outputs/apk/debug/app-debug.apk")) {
+        rename { "$apkBaseName.apk" }        // 兜底: 无论上面改名是否生效, dist 里都带版本号
+    }
+    from(layout.buildDirectory.file("outputs/apk/debug/$apkBaseName.apk"))
+    into(rootProject.file("../dist"))
+}
+
 chaquopy {
     defaultConfig {
         version = "3.11"
@@ -45,25 +70,22 @@ chaquopy {
             }
         )
         pip {
-            // 绾?Python 渚濊禆; 璧?TUNA 闀滃儚鍔犻€?            options("--index-url", "https://pypi.tuna.tsinghua.edu.cn/simple")
+            // 装 Python 依赖; 走 TUNA 镜像加速
+            options("--index-url", "https://pypi.tuna.tsinghua.edu.cn/simple")
             install("requests")
             install("certifi")
         }
     }
     sourceSets {
         getByName("main") {
-            // 澶嶇敤妗岄潰鐗堢函閫昏緫 (kuwo / lyrics / paths / util)
+            // 复用桌面版纯逻辑 (kuwo / lyrics / paths / util)
             srcDir("../../src")
         }
     }
 }
 
-
-
-
-
-
-
-
-
+dependencies {
+    // 歌单截图 OCR (离线中文+拉丁识别, 用于"从图片导入歌单")
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
+}
 

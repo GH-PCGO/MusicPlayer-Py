@@ -236,17 +236,61 @@
   </div>
 
   <div id="impLogin">
-    <div class="impHint">
-      登录网易云网页版 (music.163.com) 后，按 F12 → Network → 任意请求 →
-      复制请求头里的 <b>Cookie</b> 整串粘贴到下面。凭据只存在本机，仅用于读取你自己的歌单。
+    <!-- 来源切换 -->
+    <div id="impTabs" class="seg impTabs">
+      <button class="on" onclick="app.impMode('link')">&#128279; 链接</button>
+      <button onclick="app.impMode('text')">&#9776; 文本</button>
+      <button onclick="app.impMode('image')">&#128247; 图片</button>
+      <button onclick="app.impMode('account')">&#128100; 账号</button>
     </div>
-    <textarea id="impCookie" rows="4" spellcheck="false"
-      placeholder="MUSIC_U=xxxx; __csrf=xxxx; NMTID=xxxx"></textarea>
-    <button id="impLoginBtn" class="primaryBtn" onclick="app.impLogin()">登录并读取歌单</button>
-    <div class="impTip">不想登录？直接粘歌单链接也行：网易云歌单 id，或酷狗「分享歌单」的链接。</div>
-    <div class="impRow2">
-      <input id="impPid" type="text" spellcheck="false" placeholder="网易云歌单 id / 酷狗歌单链接">
-      <button class="ghostBtn" onclick="app.impPublic()">导入歌单</button>
+
+    <!-- ① 链接 / 分享文案 -->
+    <div id="impPaneLink" class="impPane">
+      <div class="impLead">粘贴歌单链接或 App 分享的整段文案</div>
+      <input id="impPid" type="text" spellcheck="false" class="impInput"
+             placeholder="https://m.kugou.com/songlist/... 或 网易云歌单 id">
+      <button class="primaryBtn" onclick="app.impPublic()">导入歌单</button>
+      <ul class="impList2">
+        <li>网易云：歌单链接或纯数字 id</li>
+        <li>酷狗：公开歌单链接可全量；「云歌单(gcid)」分享页只给前 10 首</li>
+        <li>整段分享文案直接粘，会自动摘出链接</li>
+      </ul>
+    </div>
+
+    <!-- ② 歌名 + 歌手 文本 -->
+    <div id="impPaneText" class="impPane" style="display:none">
+      <div class="impLead">粘贴「歌名 + 歌手」列表，每行一首</div>
+      <textarea id="impText" class="impArea" rows="6" spellcheck="false"
+        placeholder="歌名	歌手&#10;烟雨行舟	伦桑&#10;起风了	周深"></textarea>
+      <button class="primaryBtn" onclick="app.impText()">导入这些歌曲</button>
+      <ul class="impList2">
+        <li>分隔符：TAB、竖线 <code>|</code>、<code>-</code>、多空格都行</li>
+        <li>自动跳过表头/说明行；<code>歌曲:</code> 前缀、多歌手会自动规整</li>
+        <li>只有歌名（没有歌手）也能导入</li>
+      </ul>
+    </div>
+
+    <!-- ③ 图片识别 -->
+    <div id="impPaneImage" class="impPane" style="display:none">
+      <div class="impLead">从截图里识别歌名和歌手</div>
+      <button class="primaryBtn" onclick="app.impImage()">&#128247; 选择歌单截图</button>
+      <ul class="impList2">
+        <li>支持「歌名一行 / 歌手一行」的列表截图，长截屏会自动分块识别</li>
+        <li>识别结果会填到「文本」页，<b>核对后再导入</b></li>
+        <li>图片越清晰越准；糊图建议改用链接或文本导入</li>
+      </ul>
+    </div>
+
+    <!-- ④ 账号（网易云 cookie） -->
+    <div id="impPaneAccount" class="impPane" style="display:none">
+      <div class="impLead">网易云账号（可选，能读私有歌单和「我喜欢的音乐」）</div>
+      <textarea id="impCookie" class="impArea" rows="4" spellcheck="false"
+        placeholder="MUSIC_U=xxxx; __csrf=xxxx; NMTID=xxxx"></textarea>
+      <button id="impLoginBtn" class="primaryBtn" onclick="app.impLogin()">登录并读取歌单</button>
+      <ul class="impList2">
+        <li>网页版 music.163.com 登录后 F12 → Network → 任意请求 → 复制 Cookie 整串</li>
+        <li>凭据只存在本机，仅用于读取你自己的歌单</li>
+      </ul>
     </div>
   </div>
 

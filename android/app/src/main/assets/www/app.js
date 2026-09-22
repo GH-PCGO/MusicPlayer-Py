@@ -436,6 +436,10 @@ const CKEY = "musicplayer_ne_cookie_v1";
 const IMP_MAX = 1000;          // 单次导入上限 (匹配音源是逐首搜索, 不宜无上限)
 const IMP_CHUNK = 20;          // 每批匹配歌曲数
 let _impCancel = false;
+let _impMode = "link";     // 当前导入来源页签 (link/text/image/account)
+let _ocrPending = false;   // 是否正在等原生 OCR 结果
+let _ocrMode = false;      // 文本框里的内容是否来自图片识别
+let _ocrLines = "";        // OCR 每行坐标 (JSON), 供服务端按位置配对
 let _impRunning = false;
 
 function impCookie() {
@@ -461,6 +465,7 @@ function setImpProgress(f, txt) {
 }
 function openImport() {
   impStep(impCookie() ? "list" : "login");
+  impMode(_impMode || "link");         // 回到上次用的来源页签
   $("impCookie").value = impCookie();
   $("impMask").classList.add("on");
   $("impSheet").classList.add("on");
@@ -531,9 +536,24 @@ function impExtractId(s) {
 function impIsKugou(s) {
   return /kugou\.com|gcid_|songlist\//i.test(s || "");
 }
+/** 从整段分享文案里抽出歌单链接/标识 —— App 分享的"文案+链接"整段粘贴也能用。
+ *  优先取已知音乐平台的链接, 其次任意链接, 再退到 gcid_xxx / playlist_detail/<id> / 纯数字 id。 */
+function impPickLink(text) {
+  const s = String(text || "");
+  const urls = s.match(/https?:\/\/[^\s"'<>()\[\]{}（）【】,，。;；、!！？\u4e00-\u9fff]+/gi) || [];
+  const known = urls.find((u) => /kugou\.com|kuwo\.cn|163\.com/i.test(u));
+  if (known) return known;
+  if (urls.length) return urls[0];
+  const g = s.match(/gcid_[0-9a-z]+/i);
+  if (g) return g[0];
+  const pid = s.match(/playlist_detail\/(\d{5,})/i) || s.match(/[?&#]id=(\d{5,})/);
+  if (pid) return pid[1];
+  return s.trim();
+}
 function impPublic() {
-  const raw = ($("impPid").value || "").trim();
+  const raw = impPickLink($("impPid").value);
   if (!raw) { toast("请粘贴歌单链接或 id"); return; }
+  $("impPid").value = raw;               // 回填抽出来的链接, 让用户看清用了哪条
   const kg = impIsKugou(raw);
   const link = kg ? raw : impExtractId(raw);
   if (!link) { toast("没识别到歌单，请粘贴完整链接或纯数字 id"); return; }
@@ -548,6 +568,76 @@ function impCancel() {
   _impCancel = true;
   toast("正在停止…");
 }
+/** 切换导入来源页签: link / text / image / account */
+function impMode(mode) {
+  const map = { link: "impPaneLink", text: "impPaneText",
+                image: "impPaneImage", account: "impPaneAccount" };
+  Object.keys(map).forEach((k) => {
+    const el = $(map[k]);
+    if (el) el.style.display = k === mode ? "" : "none";
+  });
+  const tabs = $("impTabs");
+  if (tabs) {
+    const idx = ["link", "text", "image", "account"].indexOf(mode);
+    [...tabs.children].forEach((b, i) => b.classList.toggle("on", i === idx));
+  }
+  _impMode = mode;
+}
+/** 从图片导入: 调原生选图 + 离线 OCR, 结果由 onOcrText 回传。 */
+function impImage() {
+  const p = window.AndroidPlayer;
+  if (!p || !p.pickImage) {
+    toast("该功能在手机端可用（从相册选歌单截图）");
+    return;
+  }
+  _ocrPending = true;
+  toast("请选择歌单截图…");
+  try { p.pickImage(); } catch (e) { _ocrPending = false; toast("打开相册失败"); }
+}
+/** 原生 OCR 回调 (识别完成/失败/取消)。text=纯文本; lines=每行坐标(JSON)。 */
+function onOcrText(text, lines, err) {
+  if (!_ocrPending) return;            // 不是从"图片导入"发起的, 忽略
+  _ocrPending = false;
+  if (err) { toast(err); return; }
+  text = (text || "").trim();
+  if (!text) { toast("没识别到文字（或已取消）"); return; }
+  _ocrMode = true;                     // 这段文字来自图片 → 用"歌名/歌手两行配对"解析
+  _ocrLines = lines || "";
+  $("impText").value = text;
+  impMode("text");                     // 切到「文本」页让用户核对
+  const rows = text.split("\n").filter((x) => x.trim()).length;
+  toast("识别到 " + rows + " 行，核对后点「导入这些歌曲」", 5000);
+}
+
+/** 从粘贴的「歌名 + 歌手」文本导入 (每行一首)。 */
+async function impText(fromOcr) {
+  const text = ($("impText").value || "").trim();
+  if (!text) { toast("请先粘贴「歌名 + 歌手」的列表"); return; }
+  if (fromOcr == null) fromOcr = _ocrMode;   // 按钮进入时按来源决定解析方式
+  _impCancel = false;
+  _impRunning = true;
+  $("impCancel").textContent = "取消";
+  impStep("run");
+  $("impRunName").textContent = fromOcr ? "图片识别结果" : "粘贴的列表";
+  setImpProgress(0, "解析文本…");
+  const r = await postJson("/api/import/text",
+                           { text: text, limit: IMP_MAX, ocr: !!fromOcr,
+                             lines: fromOcr ? _ocrLines : "" });
+  if (!r || r.error) {
+    toast((r && r.error) || "解析失败");
+    _impRunning = false; impStep("login"); return;
+  }
+  const songs = (r.items || []).slice(0, IMP_MAX);
+  if (!songs.length) {
+    toast(fromOcr ? "没解析出歌曲：图里是否是「歌名 / 歌手」的列表？"
+                  : "没解析出歌曲：每行一首「歌名 + 歌手」(TAB / 竖线 / 空格 分隔)");
+    _impRunning = false; impStep("login"); return;
+  }
+  $("impRunName").textContent = (fromOcr ? "图片识别（" : "粘贴的列表（") +
+    songs.length + " 首" + (r.skipped ? "，跳过 " + r.skipped + " 行" : "") + "）";
+  await impMatchAndSave(songs, "");
+}
+
 async function impRun(pl) {
   _impCancel = false;
   _impRunning = true;
@@ -567,7 +657,16 @@ async function impRun(pl) {
     _impRunning = false; impStep("list"); return;
   }
   if (info.name) $("impRunName").textContent = info.name;
+  // 酷狗云歌单: 分享页只内嵌前 10 首, 这里明确告诉用户, 别让人以为导全了
+  const truncMsg = info.truncated
+    ? ("酷狗分享页只提供前 " + songs.length + " 首（共 " + info.total +
+       " 首），其余需在酷狗 App 内查看")
+    : "";
+  await impMatchAndSave(songs, truncMsg);
+}
 
+/** 匹配音源并写入收藏 (链接导入 / 文本粘贴导入共用)。 */
+async function impMatchAndSave(songs, truncMsg) {
   const total = songs.length;
   const got = new Array(total).fill(null);     // 每首的匹配结果 (按歌单顺序)
 
@@ -620,10 +719,13 @@ async function impRun(pl) {
   setImpProgress(1, "完成 · 导入 " + news.length + " 首" +
                  (missed ? " · 未匹配 " + missed : "") +
                  (dup ? " · 重复 " + dup : "") +
+                 (truncMsg ? " ｜ " + truncMsg : "") +
                  (total >= IMP_MAX ? " (歌单过长, 只取前 " + IMP_MAX + " 首)" : ""));
   toast(_impCancel
     ? "已取消，导入 " + news.length + " 首"
-    : "导入完成 " + news.length + " 首" + (missed ? "，跳过 " + missed + " 首未匹配" : ""));
+    : "导入完成 " + news.length + " 首" + (missed ? "，跳过 " + missed + " 首未匹配" : ""),
+    truncMsg ? 8000 : undefined);
+  if (truncMsg) toast(truncMsg, 8000);
 }
 
 /* ---------------- 页面切换 ---------------- */
@@ -1887,6 +1989,10 @@ function init() {
     impLogin: impLogin,
     impLogout: impLogout,
     impPublic: impPublic,
+    impText: impText,
+    impImage: impImage,
+    impMode: impMode,
+    onOcrText: onOcrText,
     impPublicPrompt: impPublicPrompt,
     impCancel: impCancel,
     // 安卓端通知/锁屏/耳机按键 → 网页播放控制

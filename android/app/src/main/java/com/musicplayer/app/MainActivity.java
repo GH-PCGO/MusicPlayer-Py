@@ -1,10 +1,17 @@
 package com.musicplayer.app;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.BitmapRegionDecoder;
+import android.graphics.Rect;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.MediaStore;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -19,17 +26,31 @@ import android.widget.FrameLayout;
 import com.chaquo.python.PyObject;
 import com.chaquo.python.Python;
 import com.chaquo.python.android.AndroidPlatform;
+import com.google.android.gms.tasks.OnFailureListener;
+import com.google.android.gms.tasks.OnSuccessListener;
+import com.google.mlkit.vision.common.InputImage;
+import com.google.mlkit.vision.text.Text;
+import com.google.mlkit.vision.text.TextRecognition;
+import com.google.mlkit.vision.text.TextRecognizer;
+import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.lang.ref.WeakReference;
 
 public class MainActivity extends Activity {
+    private static final int REQ_PICK_IMAGE = 1001;
+
     private WebView webView;
     private FrameLayout root;
     private View fullView;                 // 视频全屏时的自定义视图
     private WebChromeClient.CustomViewCallback fullCallback;
+    private TextRecognizer ocr;            // 歌单截图 OCR (懒加载)
 
     private static WeakReference<MainActivity> sRef;
 
@@ -66,6 +87,207 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void clear() {
             PlaybackService.clear(MainActivity.this);
+        }
+
+        /** 网页调用: 选一张歌单截图 → 离线 OCR → 文字回传给网页。 */
+        @JavascriptInterface
+        public void pickImage() {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    openImagePicker();
+                }
+            });
+        }
+    }
+
+    // -------------------------------------------------------- 歌单截图 OCR
+    private void openImagePicker() {
+        // Android 13+ 用系统相册选择器 (无"打开方式"二选一弹窗); 低版本退回 ACTION_PICK
+        try {
+            Intent i;
+            if (Build.VERSION.SDK_INT >= 33) {
+                i = new Intent(MediaStore.ACTION_PICK_IMAGES);
+            } else {
+                i = new Intent(Intent.ACTION_PICK,
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
+            }
+            startActivityForResult(i, REQ_PICK_IMAGE);
+            return;
+        } catch (Exception ignored) {
+        }
+        try {
+            Intent i = new Intent(Intent.ACTION_PICK,
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
+            startActivityForResult(i, REQ_PICK_IMAGE);
+            return;
+        } catch (Exception ignored) {
+        }
+        try {
+            Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+            i.setType("image/*");
+            startActivityForResult(i, REQ_PICK_IMAGE);
+        } catch (Exception e) {
+            jsOcr(null, null, "无法打开图片选择器");
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req != REQ_PICK_IMAGE) {
+            return;
+        }
+        if (res != RESULT_OK || data == null || data.getData() == null) {
+            jsOcr(null, null, "");                 // 用户取消
+            return;
+        }
+        runOcr(data.getData());
+    }
+
+    /** 把图片交给 ML Kit 识别, 结果整段回传网页 (保留换行, 网页再解析)。
+
+    长截屏 (歌单列表) 往往是一张又长又窄的图, 整张解码容易 OOM, ML Kit 对
+    超长图也常常什么都识别不出; 所以先拷贝到缓存文件, 再**按高度分块**逐块
+    识别 (块间留重叠), 最后把文字和"带坐标的行"合并成一份回传。
+    */
+    private static final int TILE_H = 1600;     // 每块高度 (px)
+    private static final int TILE_OVERLAP = 200; // 块间重叠, 避免把一条切两半
+
+    private void runOcr(final Uri uri) {
+        File tmp = null;
+        try {
+            tmp = new File(getCacheDir(), "ocr_src.jpg");
+            InputStream in = getContentResolver().openInputStream(uri);
+            FileOutputStream out = new FileOutputStream(tmp);
+            byte[] buf = new byte[65536];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                out.write(buf, 0, n);
+            }
+            out.close();
+            if (in != null) {
+                in.close();
+            }
+            BitmapFactory.Options o = new BitmapFactory.Options();
+            o.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(tmp.getAbsolutePath(), o);
+            final int w = o.outWidth, h = o.outHeight;
+            if (w <= 0 || h <= 0) {
+                jsOcr(null, null, "图片读取失败（格式不支持？）");
+                tmp.delete();
+                return;
+            }
+            if (ocr == null) {
+                ocr = TextRecognition.getClient(
+                        new ChineseTextRecognizerOptions.Builder().build());
+            }
+            final JSONArray lines = new JSONArray();
+            final StringBuilder text = new StringBuilder();
+            final File src = tmp;
+            recognizeTile(src, w, h, 0, lines, text);
+        } catch (Exception e) {
+            if (tmp != null) {
+                tmp.delete();
+            }
+            jsOcr(null, null, "识别出错: " + e.getMessage());
+        }
+    }
+
+    /** 识别第 y0 行开始的一块; 还有下一块就继续, 否则合并回传。 */
+    private void recognizeTile(final File src, final int w, final int h, final int y0,
+                               final JSONArray lines, final StringBuilder text) {
+        int y1 = Math.min(h, y0 + TILE_H + TILE_OVERLAP);
+        Bitmap tile = null;
+        try {
+            @SuppressWarnings("deprecation")
+            BitmapRegionDecoder dec = BitmapRegionDecoder.newInstance(
+                    new FileInputStream(src), false);
+            tile = dec.decodeRegion(new Rect(0, y0, w, y1), null);
+            dec.recycle();
+        } catch (Exception e) {
+            tile = null;
+        }
+        if (tile == null) {
+            finishOcr(src, lines, text, "长图分块读取失败");
+            return;
+        }
+        final Bitmap bmp = tile;
+        final int offset = y0;
+        ocr.process(InputImage.fromBitmap(bmp, 0))
+                .addOnSuccessListener(new OnSuccessListener<Text>() {
+                    @Override
+                    public void onSuccess(Text t) {
+                        appendOcr(t, offset, lines, text);
+                        bmp.recycle();
+                        int next = y0 + TILE_H;
+                        if (next >= h) {
+                            finishOcr(src, lines, text, null);
+                        } else {
+                            recognizeTile(src, w, h, next, lines, text);
+                        }
+                    }
+                })
+                .addOnFailureListener(new OnFailureListener() {
+                    @Override
+                    public void onFailure(Exception e) {
+                        bmp.recycle();
+                        finishOcr(src, lines, text, "识别失败: " + e.getMessage());
+                    }
+                });
+    }
+
+    private void finishOcr(File src, JSONArray lines, StringBuilder text, String err) {
+        try {
+            if (src != null) {
+                src.delete();
+            }
+        } catch (Exception ignored) {
+        }
+        if (err != null && lines.length() == 0) {
+            jsOcr(null, null, err);
+            return;
+        }
+        jsOcr(text.toString(), lines.toString(), err);
+    }
+
+    /** 把一块的识别结果追加进来 (坐标按块偏移还原到整图坐标系)。 */
+    private void appendOcr(Text t, int offset, JSONArray lines, StringBuilder text) {
+        if (t == null) {
+            return;
+        }
+        String s = t.getText();
+        if (s != null && s.trim().length() > 0) {
+            if (text.length() > 0) {
+                text.append("\n");
+            }
+            text.append(s);
+        }
+        for (Text.TextBlock block : t.getTextBlocks()) {
+            for (Text.Line line : block.getLines()) {
+                Rect r = line.getBoundingBox();
+                if (r == null) {
+                    continue;
+                }
+                JSONArray one = new JSONArray();
+                one.put(line.getText());
+                one.put(r.left);
+                one.put(r.top + offset);
+                one.put(r.right);
+                one.put(r.bottom + offset);
+                lines.put(one);
+            }
+        }
+    }
+
+    private void jsOcr(String text, String lines, String err) {
+        try {
+            String js = "window.app && app.onOcrText("
+                    + (text == null ? "null" : JSONObject.quote(text)) + ", "
+                    + (lines == null ? "null" : JSONObject.quote(lines)) + ", "
+                    + (err == null ? "null" : JSONObject.quote(err)) + ")";
+            evalJs(js);
+        } catch (Exception ignored) {
         }
     }
 

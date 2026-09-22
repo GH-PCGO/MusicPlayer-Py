@@ -164,12 +164,280 @@ _match_tls = threading.local()
 _MISS = object()
 
 
+_URL_RE = re.compile(
+    r"https?://[^\s\"'<>()\[\]{}（）【】,，。;；、!！？\u4e00-\u9fff]+", re.I)
+
+# 粘贴文本解析: 表头 / 说明行 / 分隔符
+_HDR_WORDS = {"歌名", "歌曲", "歌曲名", "名称", "标题", "title", "song", "name",
+              "歌手", "演唱", "艺人", "艺术家", "artist", "singer", "作者",
+              "序号", "编号", "no", "no.", "#", "专辑", "album", "时长"}
+_PREAMBLE_RE = re.compile(
+    r"(以下是|以下是你的|歌单中的歌曲|歌曲列表|共\s*\d+\s*首|"
+    r"^\s*[-=*_·\s]+$|^\s*\d+\s*$)", re.I)
+_NAME_PREFIX_RE = re.compile(r"^(歌曲|歌名|title)\s*[:：]\s*", re.I)
+_ROWNO_RE = re.compile(r"^\d+\s*[.、)]?$")
+# OCR 常见噪声行: 序号 / 时长 / 音质标签 / "1234人在听"
+_OCR_NOISE_RE = re.compile(
+    r"^\s*(?:\d{1,4}|[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?|"
+    r"无损|SQ|HQ|HIFI|Hi-?Res|VIP|独家|试听|MV|超清|臻品|母带|杜比|"
+    r"[\d.]+\s*万?\s*人(?:在听|收藏|听过)?|"
+    r"(?:播放|收藏|评论)\s*[\d.]+万?)\s*$", re.I)
+_TAIL_TIME_RE = re.compile(r"\s+\d{1,2}:\d{2}(?::\d{2})?\s*$")
+_LEAD_NO_RE = re.compile(r"^\s*\d{1,4}\s*[.、)]?\s+")
+_JUNK_IN_NAME_RE = re.compile(
+    r"\s*(?:无损|SQ|HQ|HIFI|Hi-?Res|VIP|独家|试听|超清|臻品|母带|杜比)$", re.I)
+# 行尾挂着的音质/会员角标 (可能连着好几个: "歌曲VIP母带MV")
+_BADGE_RE = re.compile(
+    r"[\s|·,，)]*(?:VVIP|VIP|MV|SQ|HQ|HIFI|Hi-?Res|杜比|臻品|母带|无损|独家|"
+    r"试听|超清|会员|限免|免费|付费|试听|原唱|伴奏)[\s|·,，)]*$", re.I)
+
+
+def _strip_badges(t):
+    """去掉行尾连挂的音质/会员角标 (可能连续多个)。"""
+    prev = None
+    while t and t != prev:
+        prev = t
+        t = _BADGE_RE.sub("", t).strip()
+    return t
+# 截图里混进来的界面文字
+_OCR_UI_WORDS = {"首页", "搜索", "收藏", "队列", "我的", "我的收藏", "我的音乐",
+                 "全部播放", "播放", "暂停", "导入", "设置", "我喜欢", "推荐",
+                 "歌单", "分享", "下载", "排序", "更多", "取消", "完成", "选择",
+                 "正在播放", "本地音乐", "最近播放"}
+
+
+def _clean_ocr_text(t):
+    t = (t or "").replace("\u3000", " ").strip()
+    t = _LEAD_NO_RE.sub("", t)              # 开头序号
+    t = _TAIL_TIME_RE.sub("", t).strip()    # 行尾时长
+    t = _JUNK_IN_NAME_RE.sub("", t).strip()
+    return _strip_badges(t)                 # 行尾音质/会员角标
+
+
+def parse_ocr_lines(rows, limit=1000):
+    """结构化 OCR 行 ``[[文字,left,top,right,bottom], ...]`` → [(歌名, 歌手)]。
+
+    音乐 App 列表多是"歌名一行 + 歌手一行"(竖排两行), 而 ML Kit 给出的行顺序
+    并不严格按视觉顺序, 所以这里用坐标自己聚类:
+    - 同一首的两行贴得很近; 不同歌曲之间有明显间距 → 用间距把行切成"行带";
+    - 每个行带内按 y 排序, 第一行是歌名, 第二行是歌手。
+    """
+    items = []
+    for r in rows or []:
+        try:
+            t = _clean_ocr_text(r[0])
+            l, top, rr, bt = float(r[1]), float(r[2]), float(r[3]), float(r[4])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if not t or t in _OCR_UI_WORDS or _is_hdr_word(t) or _OCR_NOISE_RE.match(t):
+            continue
+        # 只有标点/符号的行 (如 "<3" "()" "|")
+        if not re.search(r"[0-9A-Za-z\u4e00-\u9fff]", t):
+            continue
+        # 短文本里带界面关键词的 (如 "我的收藏 34" "口导入" "全部播放")
+        if len(t) <= 10 and re.search(
+                r"(我的收藏|我的音乐|全部播放|导入|设置|搜索|首页|队列|我的|"
+                r"我喜欢|正在播放|本地音乐)", t):
+            continue
+        items.append({"text": t, "l": l, "t": top, "r": rr, "b": bt,
+                      "h": max(1.0, bt - top)})
+    if not items:
+        return [], 0
+    items.sort(key=lambda x: (x["t"], x["l"]))
+    med_h = sorted(x["h"] for x in items)[len(items) // 2]
+
+    bands, cur = [], [items[0]]
+    for prev, nxt in zip(items, items[1:]):
+        if nxt["t"] - prev["b"] < med_h * 0.9:      # 贴在一起 = 同一条目
+            cur.append(nxt)
+        else:
+            bands.append(cur)
+            cur = [nxt]
+    bands.append(cur)
+
+    out, seen = [], set()
+
+    def push(name, artist):
+        name = _strip_badges(_JUNK_IN_NAME_RE.sub(
+            "", _NAME_PREFIX_RE.sub("", name).strip()).strip())
+        artist = _strip_badges(artist or "")
+        artist = re.sub(r"\s*[、,，]\s*", " / ", artist).strip(" /")
+        if not name or _is_hdr_word(name) or name in _OCR_UI_WORDS:
+            return
+        key = (name.lower(), artist.lower())
+        if key in seen:
+            return
+        seen.add(key)
+        out.append({"name": name, "artist": artist})
+
+    for band in bands:
+        band.sort(key=lambda x: x["t"])
+        if len(band) >= 2:
+            push(band[0]["text"], band[1]["text"])
+        else:
+            name, artist = _split_song_line(band[0]["text"])
+            push(name if artist else band[0]["text"], artist)
+    return out[:limit], max(0, len(items) - len(out))
+
+
+def parse_ocr_song_text(text, limit=1000):
+    """解析歌单截图 OCR 出来的文字。
+
+    音乐 App 的列表通常一行歌名、下一行歌手 (竖排两行), OCR 后就是交替的两行,
+    所以这里做"成对拼接"; 同时清掉序号/时长/音质角标等噪声。
+    """
+    lines = []
+    for raw in (text or "").splitlines():
+        ln = (raw or "").replace("\u3000", " ").strip()
+        if not ln or _PREAMBLE_RE.search(ln):
+            continue
+        ln = _LEAD_NO_RE.sub("", ln)           # 去掉开头的序号
+        ln = _TAIL_TIME_RE.sub("", ln).strip()  # 去掉行尾时长
+        if not ln or _OCR_NOISE_RE.match(ln) or _is_hdr_word(ln):
+            continue
+        lines.append(ln)
+
+    out, pending, seen = [], None, set()
+
+    def push(name, artist):
+        name = _JUNK_IN_NAME_RE.sub("", _NAME_PREFIX_RE.sub("", name).strip()).strip()
+        artist = re.sub(r"\s*[、,，]\s*", " / ", artist or "").strip(" /")
+        if not name or _is_hdr_word(name):
+            return
+        key = (name.lower(), artist.lower())
+        if key in seen:
+            return
+        seen.add(key)
+        out.append({"name": name, "artist": artist})
+
+    for ln in lines:
+        has_sep = ("\t" in ln or "|" in ln or " - " in ln
+                   or bool(re.search(r"\s{2,}", ln)))
+        name, artist = _split_song_line(ln)
+        if has_sep and artist:
+            if pending:                        # 上一行没配上对 → 当成无歌手的歌
+                push(pending, "")
+                pending = None
+            push(name, artist)
+            continue
+        if pending is None:
+            pending = ln
+        else:                                  # 歌名 + 下一行歌手
+            push(pending, ln)
+            pending = None
+    if pending:
+        push(pending, "")
+    return out[:limit], max(0, len(lines) - len(out))
+
+
+def _is_hdr_word(s):
+    return (s or "").strip().lower() in _HDR_WORDS
+
+
+def parse_song_text(text, limit=1000):
+    """把"歌名 + 歌手"的粘贴文本解析成 [(歌名, 歌手), ...]。
+
+    兼容常见导出格式:
+      - TAB 分隔 (``歌名\\t歌手``, 带表头/序号列也认)
+      - 竖线 ``|``、多空格、`` - `` 分隔
+      - 说明行/表头/分隔线自动跳过
+      - 歌名前的 ``歌曲:`` 前缀、多个歌手用 ``、`` 连接的都做了归一化
+    返回 (items, skipped) —— skipped 是被跳过的行数。
+    """
+    out, seen, skipped = [], set(), 0
+    for raw in (text or "").splitlines():
+        line = (raw or "").replace("\u3000", " ").strip()
+        if not line:
+            continue
+        if _PREAMBLE_RE.search(line):
+            skipped += 1
+            continue
+        # 表头行: 每个单元格都是字段名 (或序号)
+        cells = [c.strip() for c in re.split(r"[\t|]", line) if c.strip()]
+        if cells and all(_is_hdr_word(c) or _ROWNO_RE.match(c) for c in cells):
+            skipped += 1
+            continue
+        name, artist = _split_song_line(line)
+        if not name:
+            skipped += 1
+            continue
+        name = _NAME_PREFIX_RE.sub("", name).strip()
+        # 多个歌手用 、 连接 → 归一成 " / ", 便于匹配时取第一个歌手
+        artist = re.sub(r"\s*[、,，]\s*", " / ", artist).strip(" /")
+        if not name or _is_hdr_word(name):
+            skipped += 1
+            continue
+        key = (name.lower(), artist.lower())
+        if key in seen:
+            skipped += 1
+            continue
+        seen.add(key)
+        out.append({"name": name, "artist": artist})
+        if len(out) >= limit:
+            break
+    return out, skipped
+
+
+def _split_song_line(line):
+    """一行 → (歌名, 歌手); 认不出歌名就返回 ("", "")。"""
+    def _clean(parts):
+        """去掉开头的序号列, 返回 [歌名, 歌手, ...]。"""
+        parts = [p.strip() for p in parts if p and p.strip()]
+        while parts and _ROWNO_RE.match(parts[0]):
+            parts.pop(0)
+        return parts
+
+    # 1) TAB (最常见)
+    if "\t" in line:
+        parts = _clean(line.split("\t"))
+        if len(parts) >= 2:
+            return parts[0], parts[1]
+        return (parts[0], "") if parts else ("", "")
+    # 2) 竖线
+    if "|" in line:
+        parts = _clean(line.split("|"))
+        if len(parts) >= 2:
+            return parts[0], parts[1]
+    # 3) " - " (歌名 - 歌手)
+    if " - " in line:
+        left, right = line.split(" - ", 1)
+        return left.strip(), right.strip()
+    # 4) 两个以上空格
+    parts = _clean(re.split(r"\s{2,}", line))
+    if len(parts) >= 2:
+        return parts[0], parts[1]
+    # 5) 只有歌名 (无歌手)
+    return (_NAME_PREFIX_RE.sub("", line).strip(), "")
+
+
+def _extract_link(text):
+    """从整段分享文案里抽出歌单链接/标识。
+
+    App 的分享都是"文案 + 链接", 用户常常整段粘贴, 所以先摘出链接再判断平台;
+    优先已知音乐平台的链接, 其次任意链接, 再退到 gcid_xxx / playlist_detail/<id> / 数字 id。
+    """
+    t = (text or "").strip()
+    if not t:
+        return ""
+    urls = [u.rstrip(").,;，。）】'\"") for u in _URL_RE.findall(t)]
+    for u in urls:
+        if re.search(r"kugou\.com|kuwo\.cn|163\.com", u, re.I):
+            return u
+    if urls:
+        return urls[0]
+    m = re.search(r"gcid_[0-9a-z]+", t, re.I)
+    if m:
+        return m.group(0)
+    m = re.search(r"playlist_detail/(\d{5,})", t) or re.search(r"(\d{5,})", t)
+    return m.group(1) if m else t
+
+
 def _import_link_source(link):
     """歌单链接/ID → ("kugou"|"netease", 归一化目标)。
 
     酷狗分享链接直接用原链接; 网易云支持 "id=123456" 或纯数字。
     """
-    t = (link or "").strip()
+    t = _extract_link(link)
     if not t:
         return "", ""
     if kugou.is_kugou_link(t):
@@ -710,17 +978,48 @@ class Handler(BaseHTTPRequestHandler):
                 limit = min(2000, max(1, limit))
                 src, target = _import_link_source(link)
                 if src == "kugou":
-                    name, rows = kugou.parse_songlist(target, limit)
+                    sid = kugou.special_id(target)
+                    if sid:
+                        # 公开歌单(数字 id): 接口能翻页, 拿全
+                        name, rows, total = kugou.fetch_special(sid, limit)
+                    else:
+                        # 云歌单(gcid): 分享页只内嵌前 10 首
+                        name, rows, total = kugou.parse_songlist(target, limit)
                     if not rows:
                         return self._json(
-                            {"error": "没解析到酷狗歌单（请用 App 里"
-                                      "「分享歌单」的链接）"}, 502)
+                            {"error": "没解析到酷狗歌单（请用 App「分享歌单」"
+                                      "的链接整段粘贴，或稍后重试）"}, 502)
+                    return self._json({
+                        "name": name, "total": total,
+                        "truncated": bool(total and total > len(rows)),
+                        "items": [{"name": n, "artist": a, "cover": c}
+                                  for n, a, c in rows]})
                 elif src == "netease" and target:
                     name, rows = netease.playlist_songs_all(cookie, target, limit)
                 else:
                     return self._json({"error": "没识别到歌单链接/id"}, 400)
                 return self._json({"name": name, "items": [
                     {"name": n, "artist": a, "cover": c} for n, a, c in rows]})
+            if path == "/api/import/text":
+                # 粘贴「歌名 + 歌手」文本 → 曲目列表 (再交给 /api/import/match)
+                raw = str(data.get("text") or "")
+                try:
+                    limit = int(data.get("limit") or 1000)
+                except (TypeError, ValueError):
+                    limit = 1000
+                limit = min(2000, max(1, limit))
+                lines = data.get("lines")            # OCR 结构化行 (含坐标)
+                if lines:
+                    try:
+                        rows = json.loads(lines) if isinstance(lines, str) else lines
+                    except Exception:  # noqa: BLE001
+                        rows = []
+                    items, skipped = parse_ocr_lines(rows, limit)
+                elif data.get("ocr"):
+                    items, skipped = parse_ocr_song_text(raw, limit)
+                else:
+                    items, skipped = parse_song_text(raw, limit)
+                return self._json({"items": items, "skipped": skipped})
             if path == "/api/import/match":
                 return self._json(
                     {"items": _import_match(data.get("items") or [])})

@@ -424,6 +424,30 @@ input, select { font-family: inherit; }
 .impHint { font-size: 12px; line-height: 1.7; color: var(--dim);
   background: var(--bg); border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; }
 .impHint b { color: var(--deep); }
+/* 来源切换 (链接/文本/图片/账号) */
+.impTabs { margin: 4px 0 14px; background: var(--bg); }
+.impTabs > button { font-size: 12.5px; padding: 9px 0; white-space: nowrap; }
+/* 每个页签做成一张浅色卡片 */
+.impPane { background: var(--bg); border-radius: 16px; padding: 14px 14px 12px;
+  margin-bottom: 12px; }
+.impLead { font-size: 13px; font-weight: 700; color: var(--deep);
+  margin-bottom: 10px; }
+.impPane .impArea, .impPane input, .impPane .impInput {
+  background: var(--card); }
+.impInput { width: 100%; box-sizing: border-box; border: 1px solid var(--border);
+  border-radius: 12px; padding: 11px 12px; font-size: 12.5px;
+  color: var(--deep); font-family: inherit; }
+.impInput::placeholder, .impArea::placeholder { color: var(--dim); }
+.impList2 { margin: 12px 0 2px; padding: 0 0 0 2px; list-style: none; }
+.impList2 li { position: relative; padding-left: 14px; font-size: 11.5px;
+  line-height: 1.9; color: var(--dim); }
+.impList2 li::before { content: ""; position: absolute; left: 4px; top: 8px;
+  width: 4px; height: 4px; border-radius: 50%; background: var(--border); }
+.impList2 b { color: var(--deep); font-weight: 600; }
+.impList2 code { font-family: inherit; font-size: 11px; padding: 1px 5px;
+  border-radius: 6px; background: var(--card); color: var(--deep); }
+.impPane .primaryBtn { margin-top: 12px; }
+.impPane:last-child { margin-bottom: 0; }
 #impCookie { width: 100%; box-sizing: border-box; border: 1px solid var(--border);
   border-radius: 12px; padding: 10px; font-size: 12px; line-height: 1.5;
   background: var(--bg); color: var(--deep); resize: vertical; }
@@ -438,8 +462,6 @@ input, select { font-family: inherit; }
 .ghostBtn:active { background: var(--accent-soft); }
 .impTip { font-size: 11px; color: var(--dim); margin-top: 12px; line-height: 1.6; }
 .impRow2 { display: flex; gap: 8px; margin-top: 8px; }
-#impPid { flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: 12px;
-  padding: 10px 12px; font-size: 12px; background: var(--bg); color: var(--deep); }
 .impRow { display: flex; gap: 10px; margin-top: 14px; }
 .impUser { display: flex; align-items: center; gap: 10px; padding: 6px 0 10px;
   font-size: 14px; font-weight: 700; color: var(--deep); }
@@ -465,6 +487,12 @@ input, select { font-family: inherit; }
   transition: width .2s; }
 .impRunTxt { font-size: 12px; color: var(--dim); margin: 9px 0 14px; }
 #impList, #impRun { padding-bottom: 4px; }
+.impArea { width: 100%; box-sizing: border-box; border: 1px solid var(--border);
+  border-radius: 12px; padding: 10px; font-size: 12px; line-height: 1.5;
+  background: var(--bg); color: var(--deep); resize: vertical;
+  font-family: inherit; }
+.impWide { width: 100%; margin-top: 8px; }
+.impRow2 .impWide { margin-top: 0; }
 
 /* ---------------- 长按多选 (收藏 / 下载 批量删除) ---------------- */
 .selHead { background: var(--accent-soft); }
