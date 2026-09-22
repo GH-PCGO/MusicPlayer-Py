@@ -609,6 +609,27 @@ function onOcrText(text, lines, err) {
   toast("识别到 " + rows + " 行，核对后点「导入这些歌曲」", 5000);
 }
 
+/** 一键勾选"疑似 OCR 乱码"的收藏 (判定在后端, 与导入时同一套规则)。
+ *  只勾选不删除, 由用户确认后再点删除。 */
+async function selJunk() {
+  const favs = state.favorites || [];
+  if (!favs.length) { toast("收藏是空的"); return; }
+  let junk = [];
+  try {
+    const r = await postJson("/api/import/check",
+                             { names: favs.map((t) => trackLabel(t)) });
+    junk = (r && r.items) || [];
+  } catch (e) { toast("检查失败"); return; }
+  const set = new Set(junk);
+  if (!_sel.on || _sel.kind !== "fav") enterSelect("fav", null);
+  _sel.ids = new Set();
+  favs.forEach((t) => { if (set.has(trackLabel(t))) _sel.ids.add(favKey(t)); });
+  renderSel();
+  toast(_sel.ids.size
+    ? ("已勾选 " + _sel.ids.size + " 条疑似乱码，确认后点「删除」")
+    : "没发现疑似乱码的条目", 4000);
+}
+
 /** 从粘贴的「歌名 + 歌手」文本导入 (每行一首)。 */
 async function impText(fromOcr) {
   const text = ($("impText").value || "").trim();
@@ -1907,6 +1928,11 @@ function bindEvents() {
   });
   // 音频事件
   audio.addEventListener("timeupdate", () => {
+    // 当前播放时间 (之前这里漏了, 导致歌词界面/播放器的时间一直停在切歌时的 0:00)
+    $("pbCur").textContent = fmt(audio.currentTime);
+    if (isFinite(audio.duration) && audio.duration > 0) {
+      $("pbTotal").textContent = fmt(audio.duration);
+    }
     setProgress(audio.currentTime, audio.duration);
     setProgressMini(audio.currentTime);
     updateLyrics(audio.currentTime * 1000);
@@ -1983,6 +2009,7 @@ function init() {
     enterSelect: enterSelect,
     exitSelect: exitSelect,
     selAll: selAll,
+    selJunk: selJunk,
     selDelete: selDelete,
     openImport: openImport,
     closeImport: closeImport,

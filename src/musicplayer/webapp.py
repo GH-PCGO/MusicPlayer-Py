@@ -187,18 +187,50 @@ _LEAD_NO_RE = re.compile(r"^\s*\d{1,4}\s*[.、)]?\s+")
 _JUNK_IN_NAME_RE = re.compile(
     r"\s*(?:无损|SQ|HQ|HIFI|Hi-?Res|VIP|独家|试听|超清|臻品|母带|杜比)$", re.I)
 # 行尾挂着的音质/会员角标 (可能连着好几个: "歌曲VIP母带MV")
-_BADGE_RE = re.compile(
-    r"[\s|·,，)]*(?:VVIP|VIP|MV|SQ|HQ|HIFI|Hi-?Res|杜比|臻品|母带|无损|独家|"
-    r"试听|超清|会员|限免|免费|付费|试听|原唱|伴奏)[\s|·,，)]*$", re.I)
+_BADGE_WORDS = (r"(?:VVIP|VIP|VPV|VP|Mv|MV|Mw|Dd|CSH|SQ|HQ|Hi-?Res|杜比|臻品|母带|"
+                r"无损|独家|试听|超清|会员|限免|免费|付费|原唱|伴奏|"
+                r"蜂蛇|達蛇|娃蛇|蜂蚂|蛭蛇|维蛇|经蛇|蛇母带)")
+_BADGE_RE = re.compile(r"[\s|·,，)\]!！.()]*" + _BADGE_WORDS +
+                       r"[\s|·,，(\[!！.()]*", re.I)
+# 行尾残留的 1~2 个字母噪声 (角标被读花: "V!" "Ve" "D"); 必须是独立的一段,
+# 否则会把拉丁歌名 (Amani / Temporary) 的尾巴吃掉
+_TAIL_LETTER_RE = re.compile(r"(?<=[\s|·,，(\[])[A-Za-z]{1,2}[)\]!！.\]}]*$")
+# 中英夹缠的 OCR 噪声 (如 "小咪VPV" "G.E.M.X邓紫棋VP" 剥角标后仍夹生的)
+_OCR_SUSPECT_RE = re.compile(
+    r"[A-Za-z]{4,}[\u4e00-\u9fff]|[\u4e00-\u9fff][A-Za-z]{3,}")
+_UI_COUNTER_RE = re.compile(
+    r"(歌曲|歌单|全部|专辑|播放|收藏|排序|下载|最近|听过|共)\s*\d+|\d+\s*首")
 
 
 def _strip_badges(t):
-    """去掉行尾连挂的音质/会员角标 (可能连续多个)。"""
+    """去掉任意位置挂着的音质/会员角标 (可能连续多个, 也可能被 OCR 读花)。"""
     prev = None
     while t and t != prev:
         prev = t
-        t = _BADGE_RE.sub("", t).strip()
+        t = _BADGE_RE.sub(" ", t)
+        t = _TAIL_LETTER_RE.sub("", t)
+        t = re.sub(r"(?:^|\s)[\[\]()（）【】]+(?=\s|$)", " ", t)   # 落单的括号
+        t = re.sub(r"\s{2,}", " ", t).strip(" -|·,，)]!！.[")
     return t
+
+
+def _bad_ocr_name(s):
+    """是不是"明显不是歌名"的 OCR 垃圾 (识别阶段直接丢掉)。"""
+    t = (s or "").strip()
+    if len(t) < 2:                       # 太短 / 空
+        return True
+    if re.fullmatch(r"[\d.\s:%/\-]+", t):        # 纯数字 / 时间码
+        return True
+    if _UI_COUNTER_RE.search(t):                 # "歌曲 375" "共 55 首"
+        return True
+    if _BADGE_WORDS and re.search(_BADGE_WORDS, t, re.I):
+        return True                              # 没剥干净的角标残留
+    # 必须含有"字母"(中文/日文/泰文/拉丁…), 纯数字+符号一律当垃圾
+    if not re.search(r"[^\W\d_]", t, re.UNICODE):
+        return True
+    if _OCR_SUSPECT_RE.search(t):                # 中英夹缠/怪符号
+        return True
+    return False
 # 截图里混进来的界面文字
 _OCR_UI_WORDS = {"首页", "搜索", "收藏", "队列", "我的", "我的收藏", "我的音乐",
                  "全部播放", "播放", "暂停", "导入", "设置", "我喜欢", "推荐",
@@ -262,8 +294,11 @@ def parse_ocr_lines(rows, limit=1000):
             "", _NAME_PREFIX_RE.sub("", name).strip()).strip())
         artist = _strip_badges(artist or "")
         artist = re.sub(r"\s*[、,，]\s*", " / ", artist).strip(" /")
-        if not name or _is_hdr_word(name) or name in _OCR_UI_WORDS:
+        if (_bad_ocr_name(name) or _is_hdr_word(name)
+                or name in _OCR_UI_WORDS):   # 乱码/角标残留/界面词 → 丢掉
             return
+        if artist and _bad_ocr_name(artist):
+            artist = ""                  # 歌手只剩噪声就留空, 按歌名匹配
         key = (name.lower(), artist.lower())
         if key in seen:
             return
@@ -300,10 +335,14 @@ def parse_ocr_song_text(text, limit=1000):
     out, pending, seen = [], None, set()
 
     def push(name, artist):
-        name = _JUNK_IN_NAME_RE.sub("", _NAME_PREFIX_RE.sub("", name).strip()).strip()
-        artist = re.sub(r"\s*[、,，]\s*", " / ", artist or "").strip(" /")
-        if not name or _is_hdr_word(name):
+        name = _strip_badges(_JUNK_IN_NAME_RE.sub(
+            "", _NAME_PREFIX_RE.sub("", name).strip()).strip())
+        artist = _strip_badges(artist or "")
+        artist = re.sub(r"\s*[、,，]\s*", " / ", artist).strip(" /")
+        if _bad_ocr_name(name) or _is_hdr_word(name) or name in _OCR_UI_WORDS:
             return
+        if artist and _bad_ocr_name(artist):
+            artist = ""
         key = (name.lower(), artist.lower())
         if key in seen:
             return
@@ -1020,6 +1059,18 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     items, skipped = parse_song_text(raw, limit)
                 return self._json({"items": items, "skipped": skipped})
+            if path == "/api/import/check":
+                # 批量判断"哪些名字像 OCR 垃圾/带角标噪声"(收藏清理用)
+                names = data.get("names") or []
+                if not isinstance(names, list):
+                    names = []
+                junk = []
+                for n in names[:1000]:
+                    raw = str(n)
+                    if (_bad_ocr_name(_strip_badges(raw))
+                            or re.search(_BADGE_WORDS, raw, re.I)):
+                        junk.append(raw)
+                return self._json({"items": junk})
             if path == "/api/import/match":
                 return self._json(
                     {"items": _import_match(data.get("items") or [])})
