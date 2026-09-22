@@ -42,7 +42,7 @@ from urllib.parse import parse_qs, urlparse
 
 from musicplayer.kuwo import KuwoAPI
 from musicplayer.lyrics import (fetch_lyrics, lrc_to_plain, mp3_duration,
-                                parse_lrc, read_cover, read_uslt, save_lrc)
+                                parse_lrc, read_cover_bytes, read_uslt, save_lrc)
 from musicplayer import androidstorage
 from musicplayer import bilibili
 from musicplayer import kugou
@@ -435,7 +435,9 @@ class Handler(BaseHTTPRequestHandler):
     def _headers(self, code, ctype, length=None, extra=None):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
-        self.send_header("Cache-Control", "no-store")
+        # extra 里若自带 Cache-Control 就以它为准 (否则会出现重复头, no-store 会生效)
+        if not (extra and "Cache-Control" in extra):
+            self.send_header("Cache-Control", "no-store")
         self.send_header("Access-Control-Allow-Origin", "*")
         if length is not None:
             self.send_header("Content-Length", str(length))
@@ -662,23 +664,15 @@ class Handler(BaseHTTPRequestHandler):
                 if (not full.startswith(os.path.normpath(paths.DOWNLOAD_DIR))
                         or not os.path.isfile(full)):
                     return self._json({"error": "not found"}, 404)
+                # 直接吐内嵌 APIC 原图 (纯标准库, 安卓端没有 Pillow 也能用)
                 try:
-                    img = read_cover(full)
+                    mime, data = read_cover_bytes(full)
                 except Exception:  # noqa: BLE001
-                    img = None
-                if not img:
+                    mime, data = None, None
+                if not data:
                     return self._json({"error": "no cover"}, 404)
-                try:
-                    if not isinstance(img, bytes):
-                        import io
-                        buf = io.BytesIO()
-                        img.save(buf, format="JPEG")
-                        img = buf.getvalue()
-                except Exception:  # noqa: BLE001
-                    img = None
-                if not img:
-                    return self._json({"error": "no cover"}, 404)
-                return self._send(200, "image/jpeg", img)
+                return self._send(200, mime or "image/jpeg", data,
+                                  {"Cache-Control": "public, max-age=86400"})
 
             return self._json({"error": "not found"}, 404)
         except Exception as exc:  # noqa: BLE001

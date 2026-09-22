@@ -255,34 +255,180 @@ function renderFavorites() {
   const box = $("favList");
   if (!box) return;
   const favs = state.favorites || [];
+  const selOn = _sel.on && _sel.kind === "fav";
+  box.classList.toggle("selMode", selOn);
   const empty = $("favEmpty");
   if (empty) empty.style.display = favs.length ? "none" : "";
   const cnt = $("favCount");
   if (cnt) cnt.textContent = favs.length ? "· " + favs.length + " 首" : "";
   box.innerHTML = "";
   favs.forEach((t, i) => {
+    const key = favKey(t);
     const row = document.createElement("div");
-    row.className = "hotRow";
+    row.className = "hotRow" + (selOn && _sel.ids.has(key) ? " sel" : "");
     const cover = t.cover
       ? '<img class="hotCover" src="' + t.cover + '" onerror="this.style.visibility=\'hidden\'">'
       : '<div class="hotCover"></div>';
-    row.innerHTML = cover +
+    row.innerHTML =
+      (selOn ? '<span class="selBox">\u2713</span>' : "") + cover +
       '<div class="hotInfo"><div class="hotName">' + escapeHtml(trackLabel(t)) +
       '</div><div class="hotArtist">' + escapeHtml(t.artist || "") + '</div></div>' +
-      '<span class="hotHeart">' + ICON_HEART_ON + '</span>';
+      (selOn ? "" : '<span class="hotHeart">' + ICON_HEART_ON + '</span>');
     row.addEventListener("click", () => {
-      state.queue = favs.slice(0);
-      state.idx = i;
-      state.history = [];
-      playTrack(state.queue[i], i);
+      if (Date.now() < _selGuard) return;      // 长按补发的 click, 忽略
+      if (selOn) { toggleSel(key); return; }
+      startQueue(favs.slice(0), i);
       openPlayer();
     });
-    row.querySelector(".hotHeart").addEventListener("click", (e) => {
-      e.stopPropagation();
-      removeFav(i);
-    });
+    bindLongPress(row, () => { if (!selOn) enterSelect("fav", key); });
+    const heart = row.querySelector(".hotHeart");
+    if (heart) {
+      heart.addEventListener("click", (e) => {
+        e.stopPropagation();
+        removeFav(i);
+      });
+    }
     box.appendChild(row);
   });
+}
+
+/* ---------------- 长按多选 (收藏 / 下载 批量删除) ---------------- */
+let _sel = { on: false, kind: "", ids: new Set() };
+let _selGuard = 0;   // 长按后短暂忽略列表 click (吞掉浏览器补发的那个)
+
+function selKeyOf(kind, item) {
+  return kind === "fav" ? favKey(item) : ((item && item.name) || "");
+}
+function selItems() {
+  return _sel.kind === "fav" ? (state.favorites || []) : (state.downloads || []);
+}
+function enterSelect(kind, key) {
+  _sel = { on: true, kind: kind, ids: new Set(key ? [key] : []) };
+  // 长按后浏览器还会补一个 click; 列表这时已经重绘, 捕获阶段的拦截会失效,
+  // 所以用一个全局时间窗, 让列表的 click 处理在这段时间内直接忽略。
+  _selGuard = Date.now() + 700;
+  try { if (navigator.vibrate) navigator.vibrate(18); } catch (e) {}
+  renderSel();
+}
+function exitSelect() {
+  if (!_sel.on) return;
+  const kind = _sel.kind;
+  _sel = { on: false, kind: "", ids: new Set() };
+  renderSel();
+  // 退出时把刚才那个列表重绘一遍 (删完要立刻反映到界面上)
+  if (kind === "fav") renderFavorites();
+  else if (kind === "dl") renderDownloads();
+}
+function toggleSel(key) {
+  if (!_sel.on) return;
+  if (_sel.ids.has(key)) _sel.ids.delete(key);
+  else _sel.ids.add(key);
+  renderSel();
+}
+function selAll() {
+  const keys = selItems().map((it) => selKeyOf(_sel.kind, it));
+  const all = keys.length > 0 && keys.every((k) => _sel.ids.has(k));
+  _sel.ids = new Set(all ? [] : keys);
+  renderSel();
+}
+/** 刷新选择态 UI: 切换页头 + 重绘对应列表。 */
+function renderSel() {
+  const favOn = _sel.on && _sel.kind === "fav";
+  const dlOn = _sel.on && _sel.kind === "dl";
+  const set = (headId, selId, on) => {
+    const h = $(headId), s = $(selId);
+    if (h) h.style.display = on ? "none" : "";
+    if (s) s.style.display = on ? "" : "none";
+  };
+  set("favHead", "favSelHead", favOn);
+  set("dlHead", "dlSelHead", dlOn);
+  const n1 = $("favSelN");
+  if (n1) n1.textContent = favOn ? _sel.ids.size : 0;
+  const n2 = $("dlSelN");
+  if (n2) n2.textContent = dlOn ? _sel.ids.size : 0;
+  if (favOn) renderFavorites();
+  if (dlOn) renderDownloads();
+}
+async function selDelete() {
+  const ids = new Set(_sel.ids);
+  const kind = _sel.kind;
+  if (!ids.size) { toast("先勾选要删除的歌曲"); return; }
+  if (kind === "fav") {
+    state.favorites = (state.favorites || []).filter((t) => !ids.has(favKey(t)));
+    saveFavorites();
+    updatePlayerFav();
+    exitSelect();
+    toast("已删除 " + ids.size + " 首收藏");
+    return;
+  }
+  // 下载: 逐个删 (含同名 .lrc, 安卓同步删媒体库条目)
+  const names = [...ids];
+  const cur = currentTrack();
+  let ok = 0, fail = 0;
+  for (const name of names) {
+    try {
+      const res = await delJson("/api/download?name=" + encodeURIComponent(name));
+      if (res && res.ok) ok++;
+      else fail++;
+    } catch (e) { fail++; }
+  }
+  if (cur && cur.local && ids.has(cur.name)) {
+    audio.pause();
+    try { audio.removeAttribute("src"); } catch (e) {}
+    updateNowPlaying(null, 0, 0);
+    setPlayIcons(false);
+  }
+  dropLocalFromQueue(names);
+  exitSelect();
+  await refreshDownloads();
+  toast("已删除 " + ok + " 首" + (fail ? "，失败 " + fail : ""));
+}
+/** 删掉的本地文件若还在播放列表里, 一并摘掉并修正当前下标。 */
+function dropLocalFromQueue(names) {
+  const set = new Set(names);
+  const cur = currentTrack();
+  const key = cur ? (cur.local ? "l:" + cur.name : "r:" + cur.rid) : "";
+  const before = state.queue.length;
+  state.queue = state.queue.filter((t) => !(t.local && set.has(t.name)));
+  if (state.queue.length === before) return;
+  if (!state.queue.length) {
+    state.idx = -1;
+  } else {
+    const i = key ? state.queue.findIndex(
+      (t) => (t.local ? "l:" + t.name : "r:" + t.rid) === key) : -1;
+    state.idx = i >= 0 ? i : Math.max(0, Math.min(state.idx, state.queue.length - 1));
+  }
+  saveState();
+  if (state.page === "queue") renderQueuePage();
+}
+/** 长按 (触摸或鼠标) 触发; 触发后吞掉紧随的 click, 免得又播了一首。 */
+function bindLongPress(el, onLong) {
+  let timer = null, sx = 0, sy = 0, fired = false;
+  const pos = (e) => ((e.touches && e.touches[0]) ? e.touches[0] : e);
+  const start = (e) => {
+    const t = pos(e);
+    sx = t.clientX; sy = t.clientY; fired = false;
+    clearTimeout(timer);
+    timer = setTimeout(() => { fired = true; onLong(); }, 520);
+  };
+  const move = (e) => {
+    const t = pos(e);
+    if (Math.abs(t.clientX - sx) > 12 || Math.abs(t.clientY - sy) > 12) {
+      clearTimeout(timer);
+    }
+  };
+  const end = () => clearTimeout(timer);
+  el.addEventListener("touchstart", start, { passive: true });
+  el.addEventListener("touchmove", move, { passive: true });
+  el.addEventListener("touchend", end);
+  el.addEventListener("touchcancel", end);
+  el.addEventListener("mousedown", start);
+  el.addEventListener("mousemove", move);
+  el.addEventListener("mouseup", end);
+  el.addEventListener("mouseleave", end);
+  el.addEventListener("click", (e) => {
+    if (fired) { fired = false; e.stopPropagation(); e.preventDefault(); }
+  }, true);
 }
 
 /* ---------------- 歌单导入 (网易云 cookie) ---------------- */
@@ -515,6 +661,10 @@ window.addEventListener("popstate", () => {
     $("player").style.display = "none";
     return;
   }
+  if (_sel.on) {                 // 多选态: 返回键先退出多选
+    exitSelect();
+    return;
+  }
   const p = history.state && history.state.page;
   if (p === "player") return;                 // 过期的播放器条目
   if (p && p !== state.page && ["home", "search", "favorites", "queue", "download"].includes(p)) {
@@ -657,16 +807,14 @@ function fmtCount(n) {
   return String(n);
 }
 
-/** 点热榜某首: 队列=整张热榜(从这首开始), 缺 rid 的曲目播放时再解析。
+/** 点热榜某首: 播放列表换成整张热榜(从这首开始), 缺 rid 的曲目播放时再解析。
  *  之前是把队列换成"该歌名的酷我搜索结果", 于是听到的并不是这张榜。 */
 function playHotAt(i) {
   const it = _hotSongs[i];
   if (!it) return;
-  state.queue = _hotSongs.map((x) => ({ rid: "", name: x.name,
-                                        artist: x.artist, cover: x.cover }));
-  state.idx = i;
-  state.history = [];
-  playTrack(state.queue[i], i);
+  const list = _hotSongs.map((x) => ({ rid: "", name: x.name,
+                                       artist: x.artist, cover: x.cover }));
+  startQueue(list, i);
   openPlayer();
 }
 
@@ -694,10 +842,7 @@ async function openPlaylist(id, name) {
     state.resultBase = 0;
     showPage("search");
     renderResults(state.results, false);
-    state.queue = state.results.slice(0);
-    state.idx = 0;
-    state.history = [];
-    playTrack(state.queue[0], 0);
+    startQueue(state.results.slice(0), 0);
     openPlayer();
   } catch (e) {
     toast("歌单加载失败");
@@ -769,10 +914,7 @@ function markPlayingRows() {
 function playFromResults(i) {
   const track = state.results[i];
   if (!track) return;
-  state.queue = state.results.slice(i);
-  state.idx = 0;
-  state.history = [];
-  playTrack(state.queue[0], 0);
+  startQueue(state.results.slice(i), 0);
 }
 function addToQueue(track) {
   state.queue.push({ rid: track.rid, name: track.name, artist: track.artist, cover: track.cover });
@@ -867,12 +1009,16 @@ function renderDownloads() {
   if (!list) return;
   list.innerHTML = "";
   const items = state.downloads || [];
+  const selOn = _sel.on && _sel.kind === "dl";
+  list.classList.toggle("selMode", selOn);
   $("dlEmpty").style.display = items.length ? "none" : "";
   const cur = currentTrack();
   items.forEach((it, i) => {
+    const key = it.name;
     const row = document.createElement("div");
     row.className = "row dRow" +
-      (cur && cur.local && cur.name === it.name ? " playing" : "");
+      (cur && cur.local && cur.name === it.name ? " playing" : "") +
+      (selOn && _sel.ids.has(key) ? " sel" : "");
     let meta = "";
     if (it.dur) meta += escapeHtml(it.dur);
     if (it.size) meta += (meta ? " · " : "") + escapeHtml(it.size);
@@ -889,22 +1035,29 @@ function renderDownloads() {
       right = '<button class="dDel" title="删除">\u2715</button>';
     }
     const disp = dlDisplayName(it.name);
-    row.innerHTML = '<span class="idx">' + (i + 1) + '</span>' +
+    row.innerHTML =
+      (selOn ? '<span class="selBox">\u2713</span>'
+             : '<span class="idx">' + (i + 1) + '</span>') +
       '<div class="rInfo"><div class="rName">' +
       escapeHtml(disp) +
       '</div><div class="rArtist">' + meta + '</div></div>' +
-      actionBtns({ name: disp }, { download: false }) + right;
+      (selOn ? "" : actionBtns({ name: disp }, { download: false }) + right);
     row.addEventListener("click", () => {
+      if (Date.now() < _selGuard) return;      // 长按补发的 click, 忽略
+      if (selOn) { toggleSel(key); return; }
       if (it.status === "downloading" || it.status === "failed") return;
       playLocal(it.name);
     });
-    bindRowActions(row, { name: disp });
-    const del = row.querySelector(".dDel");
-    if (del) {
-      del.addEventListener("click", (e) => {
-        e.stopPropagation();
-        deleteLocal(it.name, row);
-      });
+    bindLongPress(row, () => { if (!selOn) enterSelect("dl", key); });
+    if (!selOn) {
+      bindRowActions(row, { name: disp });
+      const del = row.querySelector(".dDel");
+      if (del) {
+        del.addEventListener("click", (e) => {
+          e.stopPropagation();
+          deleteLocal(it.name, row);
+        });
+      }
     }
     list.appendChild(row);
   });
@@ -917,26 +1070,53 @@ function localTracks() {
     .map((it) => ({ local: true, name: it.name, rid: "", artist: "" }));
 }
 
-/** 点下载列表里的一首: 队列=整个下载列表, 从这首接着播 (不再是单曲队列)。 */
+/** 点下载列表里的一首: 播放列表换成整个下载列表, 从这首接着播。 */
 function playLocal(name) {
   const list = localTracks();
   let i = list.findIndex((t) => t.name === name);
   if (i < 0) { list.unshift({ local: true, name: name, rid: "", artist: "" }); i = 0; }
-  state.queue = list;
-  state.idx = i;
-  state.history = [];
-  playTrack(list[i], i);
+  startQueue(list, i);
   if (state.page === "download") renderDownloads();
+}
+
+/** 「播放全部」的统一入口: 先清空播放列表, 再把这一批歌整批放进列表, 从 index 开始播。 */
+function startQueue(list, index) {
+  const items = (list || []).filter((t) => t && t.name);
+  if (!items.length) return false;
+  // 1) 清空播放列表 (含旧音频, 避免新歌取流失败时旧歌还在响)
+  state.queue = [];
+  state.idx = -1;
+  state.history = [];
+  _playSeq++;                       // 让进行中的取流结果作废
+  try { audio.pause(); audio.removeAttribute("src"); } catch (e) {}
+  updateNowPlaying(null, 0, 0);
+  setPlayIcons(false);
+  // 2) 整批加入列表并开始播
+  items.forEach((t) => state.queue.push(t));
+  const i = (index >= 0 && index < items.length) ? index : 0;
+  state.idx = i;
+  playTrack(state.queue[i], i);
+  saveState();
+  if (state.page === "queue") renderQueuePage();
+  return true;
+}
+
+/** 收藏夹「全部播放」: 只放收藏夹里的歌。 */
+function playAllFav() {
+  const list = (state.favorites || []).map((t) => ({
+    rid: t.rid || "", name: t.name, artist: t.artist || "",
+    cover: t.cover || "", local: !!t.local,
+  }));
+  if (!list.length) { toast("收藏夹是空的"); return; }
+  startQueue(list, 0);
+  openPlayer();
 }
 
 /** 下载列表「全部播放」: 只播已下载到本地的歌。 */
 function playAllLocal() {
   const list = localTracks();
   if (!list.length) { toast("还没有下载歌曲"); return; }
-  state.queue = list;
-  state.idx = 0;
-  state.history = [];
-  playTrack(list[0], 0);
+  startQueue(list, 0);
   openPlayer();
 }
 
@@ -978,9 +1158,17 @@ async function watchMv(item) {
     toast("MV 获取失败");
   }
 }
+let _mvResume = false;   // 放 MV 前音乐是否在播 (退出 MV 后接着放)
 function openMvOverlay() {
   const mv = state.mvList[state.mvIndex];
   if (!mv) return;
+  // MV 自带声音: 先把音乐停掉, 免得两路声音叠在一起; 退出时再接着放
+  _mvResume = !audio.paused;
+  if (!audio.paused) {
+    audio.pause();
+    setPlayIcons(false);
+    saveState();
+  }
   setMvTitle(mv);
   playMv(mv);
   $("mvList").classList.remove("on");
@@ -1062,6 +1250,15 @@ function hideMvOverlay() {
   frame.removeAttribute("src");
   $("mvOverlay").style.display = "none";
   $("mvList").classList.remove("on");
+  // 退出 MV: 接着放刚才被打断的音乐
+  if (_mvResume) {
+    _mvResume = false;
+    if (state.idx >= 0 && audio.src) {
+      audio.play().then(() => setPlayIcons(true)).catch(() => {});
+    } else if (state.idx >= 0) {
+      playTrack(state.queue[state.idx], state.idx, null, true);
+    }
+  }
 }
 function closeMvOverlay() {
   hideMvOverlay();
@@ -1348,6 +1545,11 @@ function openPlayer() {
   }
   history.pushState({ page: "player" }, "");
 }
+/** 只隐藏播放器界面, 不碰 history —— 用于"从播放器跳到别的页面"。
+ *  (若在这里 history.back(), 它的 popstate 是异步的, 会把刚切好的页面覆盖回去) */
+function hidePlayer() {
+  $("player").style.display = "none";
+}
 function closePlayer() {
   $("player").style.display = "none";
   // 若播放器历史项在最上层, 移除它 (↓ 按钮关闭 / 底部导航跳走时保持返回键干净)
@@ -1569,7 +1771,7 @@ function bindEvents() {
   $("playerPrev").addEventListener("click", () => prevNext(-1));
   $("playerNext").addEventListener("click", () => prevNext(1));
   $("playerMode").addEventListener("click", cycleMode);
-  $("playerQueue").addEventListener("click", () => { closePlayer(); showPage("queue"); });
+  $("playerQueue").addEventListener("click", () => { hidePlayer(); showPage("queue"); });
   // 播放器: 收藏 / 下载 / 观看MV
   $("playerFav").addEventListener("click", () => toggleFav(currentTrack()));
   $("playerDl").addEventListener("click", () => {
@@ -1674,7 +1876,12 @@ function init() {
     refreshDownloads: refreshDownloads,
     playLocal: playLocal,
     playAllLocal: playAllLocal,
+    playAllFav: playAllFav,
     deleteLocal: deleteLocal,
+    enterSelect: enterSelect,
+    exitSelect: exitSelect,
+    selAll: selAll,
+    selDelete: selDelete,
     openImport: openImport,
     closeImport: closeImport,
     impLogin: impLogin,

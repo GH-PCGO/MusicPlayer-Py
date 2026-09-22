@@ -76,11 +76,17 @@
 
 <!-- ============ 页面: 我的下载 ============ -->
 <section id="downloadView" class="page" style="display:none">
-  <div class="pageHead">
+  <div class="pageHead" id="dlHead">
     <button class="navBtn" onclick="app.goHome()">&#10094;</button>
     <span class="pageTitle">我的音乐</span>
     <button class="pillBtn" onclick="app.playAllLocal()">&#9654; 全部播放</button>
     <button id="dlRefresh" class="linkBtn" onclick="app.refreshDownloads()">刷新</button>
+  </div>
+  <div class="pageHead selHead" id="dlSelHead" style="display:none">
+    <button class="navBtn" onclick="app.exitSelect()">&#10005;</button>
+    <span class="pageTitle">已选 <i id="dlSelN">0</i> 首</span>
+    <button class="pillBtn" onclick="app.selAll()">全选</button>
+    <button class="pillBtn danger" onclick="app.selDelete()">删除</button>
   </div>
   <div id="dlMenu">
     <button class="menuRow" onclick="app.openImport()">
@@ -95,10 +101,17 @@
 
 <!-- ============ 页面: 收藏 ============ -->
 <section id="favoritesView" class="page" style="display:none">
-  <div class="pageHead">
+  <div class="pageHead" id="favHead">
     <button class="navBtn" onclick="app.goHome()">&#10094;</button>
     <span class="pageTitle">我的收藏<i id="favCount" class="countTag"></i></span>
+    <button class="pillBtn" onclick="app.playAllFav()">&#9654; 全部播放</button>
     <button class="pillBtn" onclick="app.openImport()">&#8681; 导入</button>
+  </div>
+  <div class="pageHead selHead" id="favSelHead" style="display:none">
+    <button class="navBtn" onclick="app.exitSelect()">&#10005;</button>
+    <span class="pageTitle">已选 <i id="favSelN">0</i> 首</span>
+    <button class="pillBtn" onclick="app.selAll()">全选</button>
+    <button class="pillBtn danger" onclick="app.selDelete()">删除</button>
   </div>
   <div id="favList" class="hotList"></div>
   <div id="favEmpty" class="empty">还没有收藏，在播放器点 &#9825; 即可收藏<br>或用右上角「导入」搬运网易云歌单</div>

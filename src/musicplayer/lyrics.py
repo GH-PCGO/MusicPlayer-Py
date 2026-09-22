@@ -217,49 +217,80 @@ def read_uslt(path):
     return None, None
 
 
-def read_cover(path):
-    """读取 MP3 内嵌封面 (ID3v2 APIC 帧), 返回 PIL Image 或 None。"""
-    try:
-        import io
-        from PIL import Image
-    except Exception:  # noqa: BLE001
-        return None
+def read_apic_frame(path):
+    """取 MP3 内嵌封面原图 → (mime, 图片字节) 或 (None, None)。
+
+    纯标准库解析 ID3v2 APIC 帧, **不依赖 PIL** —— 安卓端 (Chaquopy) 没有打包
+    Pillow, 而 Web/播放器只需要把原图字节吐出去, 不需要解码。
+    """
     try:
         with open(path, "rb") as f:
             header = f.read(10)
         if len(header) < 10 or header[:3] != b"ID3":
-            return None
+            return None, None
         ver = header[3]
         tag_size = _syncsafe_decode(header[6:10])
         with open(path, "rb") as f:
             f.seek(10)
             tag_data = f.read(tag_size)
         frames, _ = _parse_frames(tag_data, ver)
-        for fid, fsize, fflags, fdata in frames:
-            if fid == b"APIC" and fdata:
-                try:
-                    enc = fdata[0]
-                    i = 1
-                    while i < len(fdata) and fdata[i] != 0:
-                        i += 1
-                    j = i + 2                    # 跳过 MIME\0 和图片类型
-                    if enc in (1, 2):            # UTF-16 描述: 双字节 00 结尾
-                        while j + 1 < len(fdata) and not (fdata[j] == 0 and
-                                                           fdata[j + 1] == 0):
-                            j += 2
-                        j += 2
-                    else:                        # ISO-8859-1 / UTF-8 描述
-                        while j < len(fdata) and fdata[j] != 0:
-                            j += 1
-                        j += 1
-                    img = Image.open(io.BytesIO(fdata[j:]))
-                    img.load()
-                    return img
-                except Exception:  # noqa: BLE001
-                    continue
     except Exception:  # noqa: BLE001
-        pass
-    return None
+        return None, None
+    for fid, fsize, fflags, fdata in frames:
+        if fid != b"APIC" or not fdata:
+            continue
+        try:
+            enc = fdata[0]
+            i = 1
+            while i < len(fdata) and fdata[i] != 0:      # MIME 以 \0 结尾
+                i += 1
+            mime = fdata[1:i].decode("ascii", errors="replace")
+            j = i + 2                                    # 跳过 MIME\0 和图片类型
+            if enc in (1, 2):                            # UTF-16 描述: 双字节 00 结尾
+                while j + 1 < len(fdata) and not (fdata[j] == 0 and
+                                                  fdata[j + 1] == 0):
+                    j += 2
+                j += 2
+            else:                                        # ISO-8859-1 / UTF-8 描述
+                while j < len(fdata) and fdata[j] != 0:
+                    j += 1
+                j += 1
+            data = fdata[j:]
+            if not data:
+                continue
+            if data[:2] == b"\xff\xd8":                  # 以文件头为准
+                mime = "image/jpeg"
+            elif data[:8] == b"\x89PNG\r\n\x1a\n":
+                mime = "image/png"
+            elif not mime:
+                mime = "image/jpeg"
+            return mime, data
+        except Exception:  # noqa: BLE001
+            continue
+    return None, None
+
+
+def read_cover_bytes(path):
+    """内嵌封面原图 (mime, bytes); 给 HTTP 接口用, 不需要 PIL。"""
+    return read_apic_frame(path)
+
+
+def read_cover(path):
+    """读取 MP3 内嵌封面, 返回 PIL Image 或 None (桌面 Tk 用)。"""
+    try:
+        import io
+        from PIL import Image
+    except Exception:  # noqa: BLE001
+        return None
+    _mime, data = read_apic_frame(path)
+    if not data:
+        return None
+    try:
+        img = Image.open(io.BytesIO(data))
+        img.load()
+        return img
+    except Exception:  # noqa: BLE001
+        return None
 
 
 # ============================================================ 歌词获取

@@ -465,3 +465,18 @@ input, select { font-family: inherit; }
   transition: width .2s; }
 .impRunTxt { font-size: 12px; color: var(--dim); margin: 9px 0 14px; }
 #impList, #impRun { padding-bottom: 4px; }
+
+/* ---------------- 长按多选 (收藏 / 下载 批量删除) ---------------- */
+.selHead { background: var(--accent-soft); }
+.selHead .pageTitle i { font-style: normal; font-weight: 800; color: var(--accent); }
+.pillBtn.danger { border-color: #e0554a; background: #fdecea; color: #d63a2f; }
+.selBox { flex: none; width: 22px; height: 22px; border-radius: 50%;
+  border: 2px solid var(--border); background: var(--card);
+  display: flex; align-items: center; justify-content: center;
+  color: transparent; font-size: 13px; font-weight: 800; line-height: 1; }
+.hotRow.sel, .row.sel { background: var(--accent-soft); }
+.hotRow.sel .selBox, .row.sel .selBox { background: var(--accent);
+  border-color: var(--accent); color: #fff; }
+/* 多选态下不再需要行内快捷操作 (♥ / 下载 / 删除 / 加队列) */
+.selMode .hotHeart, .selMode .rowAct, .selMode .dDel, .selMode .addBtn,
+.selMode .idx { display: none; }
