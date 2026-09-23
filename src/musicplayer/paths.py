@@ -24,3 +24,11 @@ PICTRUE = os.path.join(ASSETS_DIR, "Pictrue")
 # 数据 (下载歌曲 / 设置)
 DOWNLOAD_DIR = os.path.join(DATA_DIR, "music")
 SETTINGS_PATH = os.path.join(DATA_DIR, "settings.json")
+
+
+def set_download_dir(path):
+    """重设下载目录 (iOS 容器 Documents 等), 并保证目录存在。"""
+    global DOWNLOAD_DIR
+    os.makedirs(path, exist_ok=True)
+    DOWNLOAD_DIR = path
+    return DOWNLOAD_DIR

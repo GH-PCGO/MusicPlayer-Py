@@ -290,3 +290,45 @@ python android/app/src/main/python/server.py
 - 界面为移动端网页（无 Tkinter）；下载 / 本地音乐库 / 删除已在「我的」页实现（写桌面同一下载目录）。
 - 播放用 `<audio>` 直接拉取酷我签名直链（本地曲目走 `/api/audio` Range 流）；进度/seek/音量/切歌由 JS 处理。
 - 会话（主题/音质/音量/模式/队列/进度）存在 WebView `localStorage`，启动恢复为暂停态。
+
+## iOS 应用（Briefcase + WKWebView）
+
+`ios/` 是独立的 **Briefcase** 工程：内嵌 CPython + Rubicon-ObjC，原生壳用 `WKWebView` 打开本机 `http://127.0.0.1:{port}/`，复用与桌面/安卓同一套 `src/musicplayer`（`webapp` 服务）和 `src/musicplayer/assets/www/` 移动端页面。
+
+- **Bundle ID**：`com.ghpcgo.musicplayer.ios`（`bundle=com.ghpcgo.musicplayer` + `app_name=ios`）
+- **入口**：`ios/src/ios/__main__.py` 定义 `PythonAppDelegate`（继承 `UIResponder`），启动时把下载目录指到 App 沙盒 `Documents/music`，再起 `webapp.start(8760)` 并加载 WebView
+- **权限/后台**（`ios/pyproject.toml` 的 `[tool.briefcase.app.ios.iOS]`）：`UIBackgroundModes=["audio"]`、相册选图 OCR 描述、`UIFileSharingEnabled`（文件 App 可见下载目录）
+- **图标**：`ios/icon.png`（1024×1024 占位，可替换为正式图标后重跑构建）
+
+### 云构建（GitHub Actions，推荐）
+
+仓库为私有仓，**macOS runner 按计费分钟计费**；推送改到 `ios/**`、`src/musicplayer/**` 或手动 `workflow_dispatch` 会触发 `.github/workflows/ios.yml`：
+
+1. `pip install briefcase==0.4.5` → `briefcase create iOS` 生成 Xcode 工程并装好 `iphoneos` / `iphonesimulator` 依赖；
+2. `xcodebuild -sdk iphoneos` **无签名** Release 构建真机包（CI 无 Apple 证书，故 `CODE_SIGNING_ALLOWED=NO`）；
+3. 打成 `Payload/*.app` → `dist/MusicPlayer.ipa`，以 artifact **`musicplayer-ios-ipa`**（保留 30 天）上传。
+
+Actions → 对应 run → Artifacts 下载 `.ipa`。
+
+### 自签安装（免费 Apple ID）
+
+CI 产出的是**未签名** IPA，需在本机用免费开发者账号重签安装：
+
+- **Sideloadly**（Windows/macOS）：USB 连接 iPhone → 选中 `MusicPlayer.ipa` → 登录 Apple ID → Start；或
+- **AltStore / SideStore**：把 IPA 导入后由其用你的 Apple ID 签名安装。
+
+免费账号签名 **7 天过期**（AltStore 可在后台自动续签；Sideloadly 需到期重装）。设备需先在「设置 → 通用 → VPN与设备管理」信任对应开发者证书。最多 **3 个 App** 签名名额限制为 Apple 免费账号政策。
+
+### 本地构建（需完整 Xcode）
+
+本机只有 Command Line Tools 时 `briefcase` 会在 `Xcode.verify` 失败；安装完整 Xcode 后：
+
+```bash
+cd ios
+pip install briefcase==0.4.5
+briefcase create iOS          # 首次生成工程
+briefcase build iOS           # 模拟器 Debug 构建
+briefcase open iOS            # 打开 Xcode，选真机 + 自己的 Team 后 Archive 导出 .ipa
+```
+
+真机直接跑也可在 Xcode 里 Run（需 Apple ID 注册设备）。`briefcase package iOS` **不会**产出可分发文件（iOS 需走 Xcode 分发流程），故 CI 自行 `xcodebuild` + 打 Zip。

@@ -48,3 +48,11 @@ android/.gradle/
 android/build/
 android/app/build/
 android/local.properties
+
+# iOS / Briefcase 构建产物
+ios/build/
+ios/dist/
+ios/*.ios/
+ios/.briefcase/
+ios/**/build/
+ios/**/*.ipa

@@ -1,0 +1,91 @@
+name: iOS
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "ios/**"
+      - "src/musicplayer/**"
+      - ".github/workflows/ios.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Briefcase
+        run: pip install "briefcase==0.4.5"
+
+      - name: Show environment
+        run: |
+          xcodebuild -version
+          python --version
+          briefcase --version
+
+      - name: Create Xcode project
+        run: briefcase create iOS --no-input
+
+      - name: Device build (unsigned, Release)
+        run: |
+          set -euo pipefail
+          PROJ=$(find build -name '*.xcodeproj' -print -quit)
+          if [ -z "$PROJ" ]; then
+            echo "xcodeproj not found under build/" >&2
+            find build -maxdepth 5 -type d >&2 || true
+            exit 1
+          fi
+          echo "Project: $PROJ"
+          SYMROOT="$PWD/build/xcode-products"
+          xcodebuild build \
+            -project "$PROJ" \
+            -configuration Release \
+            -sdk iphoneos \
+            -arch arm64 \
+            SYMROOT="$SYMROOT" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            -quiet
+          APP=$(find "$SYMROOT" -name '*.app' -path '*iphoneos*' -print -quit)
+          if [ -z "$APP" ]; then
+            echo "device .app not found under $SYMROOT" >&2
+            find "$SYMROOT" -maxdepth 4 >&2 || true
+            exit 1
+          fi
+          echo "Built app: $APP"
+
+      - name: Package .ipa (Payload zip, unsigned)
+        run: |
+          set -euo pipefail
+          APP=$(find build/xcode-products -name '*.app' -path '*iphoneos*' -print -quit)
+          WORK="$PWD/build/ipa-work"
+          rm -rf "$WORK"
+          mkdir -p "$WORK/Payload"
+          ditto "$APP" "$WORK/Payload/$(basename "$APP")"
+          mkdir -p dist
+          (
+            cd "$WORK"
+            zip -qry "$OLDPWD/dist/MusicPlayer.ipa" Payload
+          )
+          ls -la dist/MusicPlayer.ipa
+          unzip -l dist/MusicPlayer.ipa | head -20
+
+      - name: Upload .ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: musicplayer-ios-ipa
+          path: ios/dist/MusicPlayer.ipa
+          if-no-files-found: error
+          retention-days: 30

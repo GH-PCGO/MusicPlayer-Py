@@ -1,0 +1,19 @@
+[tool.briefcase]
+project_name = "MusicPlayer"
+bundle = "com.ghpcgo.musicplayer"
+version = "2.0"
+url = "https://github.com/GH-PCGO/MusicPlayer-Py"
+author = "GH-PCGO"
+author_email = "gh@pcgo.local"
+license = "MIT"
+description = "Music downloader / player with embedded local web UI"
+
+[tool.briefcase.app.ios]
+formal_name = "音乐下载器"
+app_name = "ios"
+sources = ["src/ios", "../src/musicplayer"]
+requires = ["requests>=2.28", "mutagen>=1.46", "rubicon.objc>=0.4.5"]
+icon = "icon"
+
+[tool.briefcase.app.ios.iOS]
+info = { NSAppTransportSecurity = { NSAllowsArbitraryLoads = true }, NSPhotoLibraryUsageDescription = "Select lyrics / cover images for OCR import", UIBackgroundModes = ["audio"], UIFileSharingEnabled = true, LSSupportsOpeningDocumentsInPlace = true }
