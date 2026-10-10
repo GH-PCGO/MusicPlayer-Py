@@ -2,4 +2,9 @@
 <resources>
     <string name="app_name">音乐下载器</string>
     <string name="playback_channel">播放控制</string>
+    <string name="widget_desc">播放器小组件</string>
+    <string name="widget_idle">音乐下载器</string>
+    <string name="widget_prev">上一首</string>
+    <string name="widget_play">播放/暂停</string>
+    <string name="widget_next">下一首</string>
 </resources>

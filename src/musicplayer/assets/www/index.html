@@ -65,10 +65,16 @@
 
 <!-- ============ 页面: 队列 ============ -->
 <section id="queueView" class="page" style="display:none">
-  <div class="pageHead">
+  <div class="pageHead" id="qpHead">
     <button class="navBtn" onclick="app.goHome()">&#10094;</button>
     <span class="pageTitle">播放队列</span>
+    <button id="qpSort" class="linkBtn">排序</button>
     <button id="qpClear" class="linkBtn">清空</button>
+  </div>
+  <div class="pageHead qpSortHead" id="qpSortHead" style="display:none">
+    <button class="navBtn" onclick="app.exitQueueSort()">&#10005;</button>
+    <span class="pageTitle">拖动排序</span>
+    <button class="pillBtn" onclick="app.exitQueueSort()">完成</button>
   </div>
   <div id="queueList"></div>
   <div id="queueEmpty" class="empty">队列为空，去搜索加歌</div>
@@ -163,6 +169,7 @@
     <button id="playerFav" class="pactBtn" title="收藏">&#9825; 收藏</button>
     <button id="playerDl" class="pactBtn" title="下载">&#8595; 下载</button>
     <button id="playerMv" class="pactBtn" title="观看MV">&#9654; MV</button>
+    <button id="playerFloat" class="pactBtn" title="桌面歌词"><svg class="pactIc" viewBox="0 0 24 24" fill="currentColor"><path d="M3.5 4h17a1 1 0 011 1v11a1 1 0 01-1 1h-17a1 1 0 01-1-1V5a1 1 0 011-1zm1 2v9h15V6h-15zm2 1.6h5v1.4H6.5zm0 2.8h8v1.4h-8zM6.5 19h11v1.6h-11z"/></svg>桌面歌词</button>
   </div>
   <div id="playerLyrics">
     <div id="lyrCenter"></div>

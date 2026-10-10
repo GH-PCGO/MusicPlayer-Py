@@ -12,6 +12,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
+import android.provider.Settings;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -45,12 +46,21 @@ import java.lang.ref.WeakReference;
 
 public class MainActivity extends Activity {
     private static final int REQ_PICK_IMAGE = 1001;
+    private static final int REQ_OVERLAY = 1002;
 
     private WebView webView;
     private FrameLayout root;
     private View fullView;                 // 视频全屏时的自定义视图
     private WebChromeClient.CustomViewCallback fullCallback;
     private TextRecognizer ocr;            // 歌单截图 OCR (懒加载)
+
+    private LyricOverlay lyricOverlay;     // 桌面歌词悬浮窗
+    private boolean lyricWanted = false;   // 用户是否想要桌面歌词
+    private boolean resumed = false;       // 应用是否在前台
+    private String lastLyric = "", lastNext = "";
+    private float lastProgress = 1f;
+    private boolean lastPlaying = false;
+    private int accentColor = 0xFF1DB954;
 
     private static WeakReference<MainActivity> sRef;
 
@@ -89,6 +99,47 @@ public class MainActivity extends Activity {
             PlaybackService.clear(MainActivity.this);
         }
 
+        /** 网页调用: 主题色 → 小组件按钮/强调色。 */
+        @JavascriptInterface
+        public void setAccent(final String hex) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    MusicWidgetProvider.setAccent(MainActivity.this, hex);
+                    int c = parseHex(hex);
+                    if (c != 0) {
+                        accentColor = c;
+                        if (lyricOverlay != null) {
+                            lyricOverlay.setAccent(c);
+                        }
+                    }
+                }
+            });
+        }
+
+        /** 网页调用: 开关桌面歌词悬浮窗 (无权限时会申请)。 */
+        @JavascriptInterface
+        public void setLyricEnabled(final boolean on) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    setLyricEnabledInternal(on);
+                }
+            });
+        }
+
+        /** 网页调用: 推送当前/下一句歌词 + 已唱进度 + 播放态。 */
+        @JavascriptInterface
+        public void pushLyric(final String cur, final String next,
+                              final double progress, final boolean playing) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    pushLyricInternal(cur, next, (float) progress, playing);
+                }
+            });
+        }
+
         /** 网页调用: 选一张歌单截图 → 离线 OCR → 文字回传给网页。 */
         @JavascriptInterface
         public void pickImage() {
@@ -99,6 +150,84 @@ public class MainActivity extends Activity {
                 }
             });
         }
+    }
+
+    // -------------------------------------------------- 桌面歌词悬浮窗
+    private void setLyricEnabledInternal(boolean on) {
+        lyricWanted = on;
+        if (!on) {
+            hideLyricOverlay();
+            return;
+        }
+        if (!Settings.canDrawOverlays(this)) {
+            try {
+                Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:" + getPackageName()));
+                startActivityForResult(i, REQ_OVERLAY);
+            } catch (Exception e) {
+                notifyFloatDenied("denied");
+            }
+            return;
+        }
+        if (!resumed) {
+            showLyricOverlay();
+        }
+    }
+
+    private void showLyricOverlay() {
+        if (!lyricWanted || !Settings.canDrawOverlays(this)) {
+            return;
+        }
+        if (lyricOverlay == null) {
+            lyricOverlay = new LyricOverlay(this);
+            lyricOverlay.setAccent(accentColor);
+            lyricOverlay.setHost(new LyricOverlay.Host() {
+                @Override
+                public void onCommand(String cmd) {
+                    evalJs("window.app && app.mediaCmd('" + cmd + "')");
+                }
+
+                @Override
+                public void onClose() {
+                    lyricWanted = false;
+                    evalJs("window.app && app.onFloatLyricDenied('closed')");
+                }
+            });
+        }
+        lyricOverlay.update(lastLyric, lastNext, lastProgress, lastPlaying);
+        lyricOverlay.show();
+    }
+
+    private void hideLyricOverlay() {
+        if (lyricOverlay != null) {
+            lyricOverlay.hide();
+        }
+    }
+
+    private void pushLyricInternal(String cur, String next, float progress, boolean playing) {
+        lastLyric = cur == null ? "" : cur;
+        lastNext = next == null ? "" : next;
+        lastProgress = progress;
+        lastPlaying = playing;
+        if (lyricOverlay != null && lyricOverlay.isShowing()) {
+            lyricOverlay.update(lastLyric, lastNext, lastProgress, lastPlaying);
+        }
+    }
+
+    private static int parseHex(String hex) {
+        if (hex == null || hex.isEmpty()) {
+            return 0;
+        }
+        try {
+            return android.graphics.Color.parseColor(hex.startsWith("#") ? hex : "#" + hex);
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private void notifyFloatDenied(String reason) {
+        lyricWanted = false;
+        evalJs("window.app && app.onFloatLyricDenied('" + reason + "')");
     }
 
     // -------------------------------------------------------- 歌单截图 OCR
@@ -135,6 +264,18 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
+        if (req == REQ_OVERLAY) {
+            if (lyricWanted) {
+                if (Settings.canDrawOverlays(this)) {
+                    if (!resumed) {
+                        showLyricOverlay();
+                    }
+                } else {
+                    notifyFloatDenied("denied");
+                }
+            }
+            return;
+        }
         if (req != REQ_PICK_IMAGE) {
             return;
         }
@@ -446,11 +587,31 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        resumed = true;
+        hideLyricOverlay();     // 应用在前台时不显示桌面歌词
+    }
+
+    @Override
     protected void onPause() {
         super.onPause();
         // 故意不调用 webView.onPause(): 切后台/息屏后网页里的音频要继续播,
         // 连播 (ended → 下一首) 也依赖 WebView 保持运行。
         // 常驻由 PlaybackService 前台服务保证。
+        resumed = false;
+        if (lyricWanted) {
+            showLyricOverlay();   // 切到后台才显示桌面歌词
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        hideLyricOverlay();
+        if (sRef != null && sRef.get() == this) {
+            sRef = null;
+        }
+        super.onDestroy();
     }
 
     @Override

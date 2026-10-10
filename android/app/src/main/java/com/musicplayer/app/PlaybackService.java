@@ -46,6 +46,12 @@ public class PlaybackService extends Service {
     private boolean playing = false;
     private boolean fgActive = false;    // 当前是否处于前台服务状态
 
+    // 听歌时长统计 (播放期间按 tick 累加, 刷新小组件)
+    private Handler statHandler;
+    private Runnable statTick;
+    private boolean ticking = false;
+    private long lastTickAt = 0;
+
     /** 网页调用: 更新 "正在播放" 信息。 */
     public static void update(Context ctx, String title, String artist,
                               boolean playing, String cover) {
@@ -127,6 +133,7 @@ public class PlaybackService extends Service {
             return START_NOT_STICKY;
         }
         if ("stop".equals(action)) {
+            stopTicking(true);
             releaseWake();
             if (session != null) {
                 session.setActive(false);
@@ -143,10 +150,13 @@ public class PlaybackService extends Service {
         }
         if (playing) {
             acquireWake();
+            startTicking();
         } else {
             releaseWake();
+            stopTicking(true);
         }
         pushState();
+        MusicWidgetProvider.push(this, title, artist, playing, null);
         Notification notif = buildNotification();
         // 只要是被 startForegroundService 拉起来的, 就必须在 5s 内
         // startForeground(), 否则系统会抛 ForegroundServiceDidNotStartInTime
@@ -167,6 +177,7 @@ public class PlaybackService extends Service {
 
     @Override
     public void onDestroy() {
+        stopTicking(true);
         releaseWake();
         if (session != null) {
             session.release();
@@ -203,6 +214,49 @@ public class PlaybackService extends Service {
                 wake.release();
             }
         } catch (Exception ignored) {
+        }
+    }
+
+    // ------------------------------------------------------ 听歌时长统计
+    /** 播放期间每 20s 落一次盘, 顺带刷新小组件的时长文案。 */
+    private void startTicking() {
+        if (ticking) {
+            return;
+        }
+        ticking = true;
+        lastTickAt = System.currentTimeMillis();
+        if (statHandler == null) {
+            statHandler = new Handler(Looper.getMainLooper());
+        }
+        if (statTick == null) {
+            statTick = new Runnable() {
+                @Override
+                public void run() {
+                    if (!ticking) {
+                        return;
+                    }
+                    long now = System.currentTimeMillis();
+                    ListenStats.add(PlaybackService.this, now - lastTickAt);
+                    lastTickAt = now;
+                    MusicWidgetProvider.updateAll(PlaybackService.this);
+                    statHandler.postDelayed(this, 20000);
+                }
+            };
+        }
+        statHandler.postDelayed(statTick, 20000);
+    }
+
+    private void stopTicking(boolean finalize) {
+        if (ticking && finalize) {
+            long now = System.currentTimeMillis();
+            ListenStats.add(this, now - lastTickAt);
+        }
+        ticking = false;
+        if (statHandler != null && statTick != null) {
+            statHandler.removeCallbacks(statTick);
+        }
+        if (finalize) {
+            MusicWidgetProvider.updateAll(this);
         }
     }
 
@@ -329,6 +383,9 @@ public class PlaybackService extends Service {
                         }
                         art = got;
                         pushState();
+                        if (got != null) {
+                            MusicWidgetProvider.setCover(PlaybackService.this, got);
+                        }
                         if (fgActive) {
                             NotificationManager nm = (NotificationManager)
                                     getSystemService(Context.NOTIFICATION_SERVICE);
